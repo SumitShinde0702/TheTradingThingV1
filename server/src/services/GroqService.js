@@ -100,11 +100,23 @@ export class GroqService {
     const agentType = agent.metadata?.type || "general";
     const model = this.getModelForAgentType(agentType);
 
+    // For trading agents, fetch latest trading signal from nofx API if payment is verified
+    let tradingData = null;
+    if (agentType === "trading" && context.paymentVerified) {
+      try {
+        tradingData = await this.fetchTradingSignal(agent);
+        console.log(`[GroqService] Fetched trading signal for ${agent.name}`);
+      } catch (error) {
+        console.error(`[GroqService] Failed to fetch trading signal: ${error.message}`);
+        // Continue without trading data if fetch fails
+      }
+    }
+
     // Build system prompt based on agent
-    const systemPrompt = this.buildSystemPrompt(agent, context);
+    const systemPrompt = this.buildSystemPrompt(agent, context, tradingData);
 
     // Build user message with context
-    const userPrompt = this.buildUserPrompt(message, fromAgentId, context);
+    const userPrompt = this.buildUserPrompt(message, fromAgentId, context, tradingData);
 
     return await this.generateResponse({
       systemPrompt,
@@ -115,12 +127,57 @@ export class GroqService {
   }
 
   /**
+   * Fetch latest trading signal from nofx API
+   * @param {Object} agent - Trading agent object
+   * @returns {Promise<Object|null>} Trading signal data or null if unavailable
+   */
+  async fetchTradingSignal(agent) {
+    // Get nofx API URL from environment or agent metadata
+    const nofxApiUrl = 
+      agent.metadata?.nofxApiUrl || 
+      process.env.NOFX_API_URL || 
+      "http://localhost:8080"; // Default nofx API port
+    
+    // Get trader ID or model from agent metadata
+    const traderId = agent.metadata?.traderId || agent.metadata?.trader_id;
+    const model = agent.metadata?.model;
+    
+    let apiUrl;
+    if (traderId) {
+      apiUrl = `${nofxApiUrl}/api/trading-signal?trader_id=${traderId}`;
+    } else if (model) {
+      apiUrl = `${nofxApiUrl}/api/trading-signal?model=${model}`;
+    } else {
+      // Default: try to get first trader (if nofx only has one trader)
+      apiUrl = `${nofxApiUrl}/api/trading-signal?trader_id=default_trader`;
+    }
+
+    try {
+      const response = await axios.get(apiUrl, {
+        timeout: 10000, // 10 second timeout
+        validateStatus: (status) => status === 200 || status === 404
+      });
+
+      if (response.status === 404) {
+        console.warn(`[GroqService] Trading signal not found at ${apiUrl}`);
+        return null;
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error(`[GroqService] Error fetching trading signal from ${apiUrl}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Build system prompt for agent
    * @param {Object} agent - Agent object
    * @param {Object} context - Context information
+   * @param {Object} tradingData - Trading signal data (optional)
    * @returns {string}
    */
-  buildSystemPrompt(agent, context) {
+  buildSystemPrompt(agent, context, tradingData = null) {
     const basePrompt = `You are ${agent.name}, an autonomous AI agent. ${agent.description}`;
 
     let prompt = basePrompt;
@@ -140,6 +197,9 @@ export class GroqService {
     switch (type) {
       case "trading":
         prompt += `\n\nYou are a trading agent. You can analyze market conditions, provide trading insights, and help with trading decisions. Be professional and data-driven in your responses.`;
+        if (tradingData) {
+          prompt += `\n\nYou have access to real-time trading decision data from the NOFX trading system. When presenting this data to users, format it clearly and provide actionable insights.`;
+        }
         break;
       case "payment":
         prompt += `\n\nYou are a payment processing agent. You handle payment requests, verify transactions, and provide payment-related information. Be clear and precise about payment details.`;
@@ -164,9 +224,10 @@ export class GroqService {
    * @param {string} message - Original message
    * @param {string} fromAgentId - Sender agent ID
    * @param {Object} context - Additional context
+   * @param {Object} tradingData - Trading signal data (optional)
    * @returns {string}
    */
-  buildUserPrompt(message, fromAgentId, context) {
+  buildUserPrompt(message, fromAgentId, context, tradingData = null) {
     let prompt = `Message from agent ${fromAgentId}: ${message}`;
 
     if (context.payment) {
@@ -179,6 +240,41 @@ export class GroqService {
 
     if (context.timestamp) {
       prompt += `\n\nTimestamp: ${new Date(context.timestamp).toISOString()}`;
+    }
+
+    // Include trading data in the prompt if available
+    if (tradingData) {
+      prompt += `\n\n=== LATEST TRADING SIGNAL FROM NOFX SYSTEM ===`;
+      prompt += `\nTrader: ${tradingData.trader_name || tradingData.trader_id || 'Unknown'}`;
+      prompt += `\nAI Model: ${tradingData.ai_model || 'Unknown'}`;
+      prompt += `\nCycle #${tradingData.cycle_number || 'N/A'}`;
+      prompt += `\nTimestamp: ${tradingData.timestamp || 'N/A'}`;
+      
+      if (tradingData.chain_of_thought) {
+        prompt += `\n\nChain of Thought:`;
+        prompt += `\n${tradingData.chain_of_thought}`;
+      }
+      
+      if (tradingData.decisions && Array.isArray(tradingData.decisions)) {
+        prompt += `\n\nTrading Decisions (${tradingData.decisions.length}):`;
+        tradingData.decisions.forEach((decision, idx) => {
+          prompt += `\n  [${idx + 1}] ${decision.symbol || 'ALL'}: ${decision.action || 'N/A'}`;
+          if (decision.reasoning || decision.error) {
+            prompt += ` - ${decision.reasoning || decision.error}`;
+          }
+        });
+      }
+      
+      if (tradingData.account_state) {
+        prompt += `\n\nAccount State:`;
+        prompt += `\n  Total Equity: ${tradingData.account_state.total_equity || 'N/A'} USDT`;
+        prompt += `\n  Available Balance: ${tradingData.account_state.available_balance || 'N/A'} USDT`;
+        prompt += `\n  Position Count: ${tradingData.account_state.position_count || 0}`;
+        prompt += `\n  Margin Used: ${tradingData.account_state.margin_used_pct || 0}%`;
+      }
+      
+      prompt += `\n\n=== END TRADING SIGNAL ===`;
+      prompt += `\n\nBased on this real-time trading data, provide a helpful response to the user's query. If the user is asking about trading signals, decisions, or market analysis, use this data to provide accurate and up-to-date information.`;
     }
 
     return prompt;

@@ -1,4 +1,5 @@
 import express from "express";
+import { HEDERA_CONFIG } from "../config/hedera.js";
 
 /**
  * Agent routes for A2A communication and management

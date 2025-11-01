@@ -82,6 +82,24 @@ export class X402Facilitator {
         return { verified: false, error: "No transaction hash in payment proof" };
       }
 
+      // In TEST_MODE, accept any transaction hash as valid (mock payments)
+      if (HEDERA_CONFIG.TEST_MODE) {
+        console.log(`🧪 [X402Facilitator] TEST_MODE enabled - accepting mock payment`);
+        console.log(`   Transaction hash: ${txHash}`);
+        // Basic validation: ensure it looks like a transaction hash
+        if (txHash && typeof txHash === "string" && txHash.startsWith("0x") && txHash.length >= 10) {
+          console.log(`✅ [X402Facilitator] Mock payment verified in TEST_MODE`);
+          return { 
+            verified: true, 
+            txHash,
+            testMode: true,
+            message: "Payment verified in TEST_MODE (simulated)"
+          };
+        } else {
+          console.warn(`⚠️  [X402Facilitator] Invalid transaction hash format: ${txHash}`);
+        }
+      }
+
       // For EVM transactions, query by transaction hash
       // Hedera mirror node query formats:
       // 1. Direct hash: /transactions/{hash}

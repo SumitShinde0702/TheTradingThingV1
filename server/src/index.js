@@ -20,7 +20,12 @@ const app = express();
 const PORT = process.env.PORT || 8443;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: true, // Allow all origins (for development)
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Payment']
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -120,6 +125,7 @@ async function initializeAgents() {
     console.log("\n📝 Initializing example agents...");
 
     // Example Agent 1: Trading Agent
+    // Skip on-chain check during initialization to avoid connection issues
     const tradingAgent = await agentManager.registerAgent({
       name: "TradingAgent",
       description: "Autonomous trading agent for cryptocurrency markets",
@@ -132,7 +138,7 @@ async function initializeAgents() {
         instructions:
           "You are an expert trading agent. Provide insightful market analysis and trading recommendations based on data and trends.",
       },
-    });
+    }, true); // skipOnChainCheck = true
 
     tradingAgent.setStatus("online");
     console.log(
@@ -154,7 +160,7 @@ async function initializeAgents() {
         instructions:
           "You are a payment processing agent. Help users understand payment requirements, verify transactions, and provide clear information about payment status.",
       },
-    });
+    }, true); // skipOnChainCheck = true
 
     paymentAgent.setStatus("online");
     console.log(
@@ -174,7 +180,7 @@ async function initializeAgents() {
         instructions:
           "You are a data analytics agent. Provide detailed analysis, identify patterns, and offer actionable insights based on data.",
       },
-    });
+    }, true); // skipOnChainCheck = true
 
     analyzerAgent.setStatus("online");
     console.log(

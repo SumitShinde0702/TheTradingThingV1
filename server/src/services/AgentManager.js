@@ -10,12 +10,23 @@ export class AgentManager {
   constructor() {
     this.agents = new Map(); // agentId -> Agent
     this.agentsByName = new Map(); // name -> Agent
-    this.erc8004Service = new ERC8004Service();
+    // Lazy-load services to avoid connection issues at startup
+    this._erc8004Service = null;
     this.x402Service = new X402Service();
     this.groqService = new GroqService();
 
     // Capability index for discovery
     this.capabilityIndex = new Map(); // capability -> Set of agentIds
+  }
+
+  /**
+   * Lazy-load ERC8004Service to avoid connection issues at startup
+   */
+  getERC8004Service() {
+    if (!this._erc8004Service) {
+      this._erc8004Service = new ERC8004Service();
+    }
+    return this._erc8004Service;
   }
 
   /**
@@ -26,11 +37,12 @@ export class AgentManager {
    */
   async findExistingAgentByEndpoint(endpoint, ownerAddress) {
     try {
+      const ercService = this.getERC8004Service();
       // Query recent Registered events for the owner
-      const currentBlock = await this.erc8004Service.provider.getBlockNumber();
+      const currentBlock = await ercService.provider.getBlockNumber();
       const fromBlock = Math.max(0, currentBlock - 100000); // Last 100k blocks
 
-      const events = await this.erc8004Service.identityRegistry.queryFilter(
+      const events = await ercService.identityRegistry.queryFilter(
         "Registered",
         fromBlock,
         "latest"
@@ -64,7 +76,8 @@ export class AgentManager {
 
               // Verify agent still exists and owner still matches
               try {
-                const currentOwner = await this.erc8004Service.getAgentOwner(
+                const ercService = this.getERC8004Service();
+                const currentOwner = await ercService.getAgentOwner(
                   agentId
                 );
                 if (currentOwner.toLowerCase() === ownerAddress.toLowerCase()) {
@@ -119,7 +132,8 @@ export class AgentManager {
             agent.registered = true;
             // Verify agent exists
             try {
-              const owner = await this.erc8004Service.getAgentOwner(
+              const ercService = this.getERC8004Service();
+              const owner = await ercService.getAgentOwner(
                 existingAgentId
               );
               agent.walletAddress = owner;
@@ -133,10 +147,23 @@ export class AgentManager {
           }
         }
 
-        // Only register on-chain if we didn't find an existing agent
-        if (!agent.id) {
-          const registration = await agent.register(this.erc8004Service);
-          agent.id = registration.agentId;
+        // Only register on-chain if we didn't find an existing agent AND we're not skipping on-chain registration
+        if (!agent.id && !skipOnChainCheck) {
+          try {
+            const ercService = this.getERC8004Service();
+            const registration = await agent.register(ercService);
+            agent.id = registration.agentId;
+          } catch (error) {
+            console.warn(`Failed to register agent ${agent.name} on-chain: ${error.message}`);
+            console.warn(`   Agent will work locally with temporary ID`);
+            // Generate a temporary local ID if blockchain registration fails
+            agent.id = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            agent.registered = false;
+          }
+        } else if (!agent.id) {
+          // Skip on-chain registration, use local ID
+          agent.id = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          agent.registered = false;
         }
       }
 
@@ -233,13 +260,6 @@ export class AgentManager {
         this.agentsByName.delete(agent.name);
       }
     }
-  }
-
-  /**
-   * Get ERC-8004 service
-   */
-  getERC8004Service() {
-    return this.erc8004Service;
   }
 
   /**

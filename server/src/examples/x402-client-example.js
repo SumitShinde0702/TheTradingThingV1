@@ -18,7 +18,21 @@ const api = axios.create({
 
 // Payer wallet (client making payment - uses client account)
 const PAYER_PRIVATE_KEY = process.env.PAYER_PRIVATE_KEY || HEDERA_CONFIG.CLIENT_PRIVATE_KEY;
-const payerWallet = new ethers.Wallet(PAYER_PRIVATE_KEY, new ethers.JsonRpcProvider(HEDERA_CONFIG.JSON_RPC_URL));
+let payerWallet = null;
+
+const getPayerWallet = () => {
+  if (!payerWallet) {
+    // Use explicit network to prevent auto-detection connection issues
+    payerWallet = new ethers.Wallet(
+      PAYER_PRIVATE_KEY, 
+      new ethers.JsonRpcProvider(HEDERA_CONFIG.JSON_RPC_URL, {
+        name: "hedera-testnet",
+        chainId: HEDERA_CONFIG.CHAIN_ID
+      })
+    );
+  }
+  return payerWallet;
+};
 
 async function requestServiceWithPayment(agentId, message, paymentAmount = "0.1") {
   console.log(`\n🔄 Step 1: Requesting service from agent ${agentId}...\n`);
@@ -96,11 +110,61 @@ async function executePayment(paymentDetails) {
     console.log(`   Recipient: ${recipient}`);
     console.log(`   Amount: ${paymentDetails.amount} HBAR\n`);
 
-    // Execute payment on Hedera
-    const tx = await payerWallet.sendTransaction({
-      to: recipient,
-      value: ethers.parseEther(paymentDetails.amount)
-    });
+    // Get wallet (lazy initialization)
+    const wallet = getPayerWallet();
+    
+    // Execute payment on Hedera with retry logic
+    let tx;
+    const maxRetries = 5; // Increased retries
+    let lastError;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`   Attempting transaction (attempt ${attempt}/${maxRetries})...`);
+        tx = await wallet.sendTransaction({
+          to: recipient,
+          value: ethers.parseEther(paymentDetails.amount)
+        });
+        break; // Success
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxRetries) {
+          // All direct attempts failed - try server endpoint as fallback
+          console.log(`   ⚠️  All direct RPC attempts failed`);
+          console.log(`   🔄 Falling back to server payment endpoint...`);
+          
+          try {
+            const response = await api.post("/api/payments/execute", {
+              recipient: recipient,
+              amount: paymentDetails.amount,
+              token: paymentDetails.token || "HBAR"
+            });
+            
+            if (response.data.success && response.data.txHash) {
+              console.log(`✅ Payment completed via server endpoint!`);
+              console.log(`   Transaction Hash: ${response.data.txHash}`);
+              console.log(`   View on HashScan: ${response.data.hashscanUrl || `https://hashscan.io/testnet/transaction/${response.data.txHash}`}`);
+              
+              // Wait for mirror node
+              console.log(`\n⏳ Waiting 15 seconds for mirror node to index transaction...`);
+              await new Promise(resolve => setTimeout(resolve, 15000));
+              console.log(`   Ready for verification!\n`);
+              
+              return response.data.txHash;
+            }
+          } catch (serverError) {
+            throw new Error(`Both direct RPC (${lastError.message}) and server endpoint (${serverError.response?.data?.error || serverError.message}) failed`);
+          }
+          
+          throw error;
+        }
+        // Exponential backoff: 2s, 4s, 8s, 16s
+        const delay = Math.min(2000 * Math.pow(2, attempt - 1), 16000);
+        console.log(`   ⚠️  Attempt ${attempt} failed: ${error.message}`);
+        console.log(`   ⏳ Retrying in ${delay/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
 
     console.log(`   Transaction sent: ${tx.hash}`);
     console.log(`   Waiting for confirmation (this may take 5-10 seconds)...\n`);
@@ -222,4 +286,3 @@ async function main() {
 }
 
 main();
-

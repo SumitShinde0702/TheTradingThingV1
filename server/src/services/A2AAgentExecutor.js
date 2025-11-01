@@ -80,6 +80,9 @@ export class HederaAgentExecutor {
       eventBus.publish(workingUpdate);
 
       // Use existing agent logic to process message
+      // Extract payment verification status from metadata
+      const paymentVerified = userMessage.metadata?.paymentVerified === true;
+      
       const aiResponse = await this.agentManager.processMessageWithAI(
         this.agent.id,
         messageText,
@@ -87,6 +90,7 @@ export class HederaAgentExecutor {
         {
           taskId,
           contextId,
+          paymentVerified, // Explicitly pass payment verification status
           ...userMessage.metadata,
         }
       );
