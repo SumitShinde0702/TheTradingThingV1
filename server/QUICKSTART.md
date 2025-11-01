@@ -80,7 +80,8 @@ curl -X POST http://localhost:8443/api/agents/<agentId>/message \
 
 ### Check balance:
 ```bash
-curl http://localhost:8443/api/payments/balance/0x1fef1c22bbf2e66bc575c8b433d75588ab2aea92
+# Replace with your account EVM address
+curl http://localhost:8443/api/payments/balance/0x987effd3acba1cf13968bc0c3af3fd661e07c62e
 ```
 
 ## 5. Run Example Scripts

@@ -9,13 +9,14 @@ Create a `.env` file in the `server/` directory with the following variables:
 GROQ_API_KEY=gsk_...
 
 # Hedera Configuration (Optional - defaults are in config/hedera.js)
+# Replace with your actual account details
 OWNER_ACCOUNT_ID=0.0.7170260
-OWNER_EVM_ADDRESS=0x987effd3acba1cf13968bc0c3af3fd661e07c62e
-OWNER_PRIVATE_KEY=0x88921444661772c1e5bc273d5f9d00099c189a3294de9f85eae65307d80fbd67
+OWNER_EVM_ADDRESS=0x...
+OWNER_PRIVATE_KEY=0x...
 
 CLIENT_ACCOUNT_ID=0.0.7174458
-CLIENT_EVM_ADDRESS=0x1fef1c22bbf2e66bc575c8b433d75588ab2aea92
-CLIENT_PRIVATE_KEY=0x06a0a3da5723988cdd989c371de7f77953c36cc27eb4c288cf03dc6c629b2e12
+CLIENT_EVM_ADDRESS=0x...
+CLIENT_PRIVATE_KEY=0x...
 
 # x402 Facilitator URL (Optional - uses hosted facilitator by default)
 X402_FACILITATOR_URL=https://x402-hedera-production.up.railway.app

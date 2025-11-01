@@ -76,9 +76,9 @@ This document explains what data in your agent system is **generated** (dynamic/
 - **Change**: Edit the config file
 
 ### Groq API Key
-- **Hardcoded in**: `src/config/groq.js` (line 4)
-- **Note**: Should be moved to environment variable in production!
-- **Change**: Edit config or set `GROQ_API_KEY` env var
+- **Location**: Environment variable `GROQ_API_KEY` (loaded from `.env` file)
+- **Note**: Not hardcoded - must be set in `.env` file
+- **Change**: Edit `.env` file or set `GROQ_API_KEY` environment variable
 
 ### Available AI Models List
 - **Hardcoded in**: `src/services/GroqService.js` → `getAvailableModels()`
@@ -127,7 +127,7 @@ curl -X POST http://localhost:8443/api/agents/register \
 Edit `src/services/GroqService.js` → `getAvailableModels()` or `getModelForAgentType()`
 
 ### To Use Environment Variables:
-1. Create `.env` file
+1. Create `.env` file in `server/` directory
 2. Set `GROQ_API_KEY=your_key`
-3. Update `src/config/groq.js` to read from `process.env.GROQ_API_KEY`
+3. See [ENV_SETUP.md](./ENV_SETUP.md) for complete setup instructions
 

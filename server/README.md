@@ -18,11 +18,16 @@ Multi-agent HTTPS server with ERC-8004 agent discovery and x402 payment integrat
 
 The server uses the following Hedera testnet configuration:
 
-- **Account ID**: 0.0.7174458
-- **EVM Address**: 0x1fef1c22bbf2e66bc575c8b433d75588ab2aea92
+### Accounts
+- **Owner Account** (Server/Agents): 0.0.7170260
+- **Client Account** (Testing): 0.0.7174458
+
+### Contracts
 - **Identity Registry**: 0x4c74ebd72921d537159ed2053f46c12a7d8e5923
 - **Reputation Registry**: 0xc565edcba77e3abeade40bfd6cf6bf583b3293e0
 - **Validation Registry**: 0x18df085d85c586e9241e0cd121ca422f571c2da6
+
+See [ACCOUNT_SETUP.md](./ACCOUNT_SETUP.md) for account details and [ENV_SETUP.md](./ENV_SETUP.md) for environment variable setup.
 
 ## Installation
 

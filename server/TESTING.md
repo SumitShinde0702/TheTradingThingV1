@@ -111,7 +111,7 @@ Use a tool like Postman or curl to POST to:
 4. Check that you have HBAR for gas fees
 
 ### ❌ If AI Doesn't Work:
-1. Verify Groq API key is set in `src/config/groq.js`
+1. Verify Groq API key is set in `.env` file (see [ENV_SETUP.md](./ENV_SETUP.md))
 2. Check network connection
 3. Verify Groq API is accessible
 4. Check server logs for API errors
@@ -156,7 +156,7 @@ curl -X POST http://localhost:8443/api/agents/$PAYMENT_AGENT_ID/message \
 - Ensure account has HBAR for gas
 
 ### AI Not Responding
-- Check Groq API key in `src/config/groq.js`
+- Check Groq API key in `.env` file (see [ENV_SETUP.md](./ENV_SETUP.md))
 - Test Groq API directly: `curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer YOUR_KEY"`
 - Check server logs for API errors
 
