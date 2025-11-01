@@ -271,7 +271,44 @@ async function executePayment(paymentDetails) {
 }
 
 /**
- * Tool 4: Send message to agent via A2A
+ * Tool 4: Respond directly to the user
+ * This allows the agent to communicate with the user without needing to call another agent
+ */
+const respondToUserTool = tool(
+  async (input) => {
+    const { message } = input;
+
+    console.log("\n🛠️  [respond_to_user] Starting...");
+    console.log(`   Input: { message: "${message.substring(0, 100)}..." }`);
+
+    // This tool just returns the message - the main function will display it
+    console.log(`   💬 Message to user: ${message}`);
+    console.log("✅ [respond_to_user] Completed\n");
+
+    return JSON.stringify({
+      success: true,
+      message: message,
+    });
+  },
+  {
+    name: "respond_to_user",
+    description:
+      "Respond directly to the user. Use this when you need to communicate information, " +
+      "ask for clarification, or provide updates without calling another agent. " +
+      "For example, use this when an agent you contacted needs more information from the user, " +
+      "or when you need to explain something to the user.",
+    schema: z.object({
+      message: z
+        .string()
+        .describe(
+          "The message to send to the user. This should be clear and helpful."
+        ),
+    }),
+  }
+);
+
+/**
+ * Tool 5: Send message to agent via A2A
  */
 const sendMessageToAgentTool = tool(
   async (input) => {
@@ -602,20 +639,22 @@ Your workflow:
    - The tool handles payment automatically if required
    - For follow-up messages to the same agent, use the same contextId to maintain conversation context
 
-4. Return the agent's response to the user:
-   - Present the response clearly and naturally
-   - If the agent returned tool calls or data, explain what happened
-   - If more information is needed, ask the user
-   - If the response contains parts, extract and present the text parts clearly
+4. Handle agent responses and communicate with the user:
+   - When an agent responds, use respond_to_user to relay the information to the user
+   - If the agent asks for more information, use respond_to_user to ask the user for that information
+   - Don't try to answer the agent's questions yourself - always ask the user using respond_to_user
+   - Present agent responses clearly and naturally using respond_to_user
+   - Always end with respond_to_user to communicate back to the user - never just call send_message_to_agent without following up with respond_to_user
 
 Key points:
 - Agents are discovered from the ERC-8004 blockchain registry
 - Communication happens via A2A (Agent-to-Agent) protocol over JSON-RPC
 - Some agents require payment (handled automatically by send_message_to_agent)
 - Use contextId to maintain conversation state across multiple messages
-- Always be transparent about what you're doing (discovering agents, selecting, sending messages)
-- If an agent doesn't respond appropriately, you can try discovering different agents
-- When presenting agent responses, extract text from message parts and present them naturally`;
+- Always use respond_to_user to communicate with the user - this is how you provide answers and ask questions
+- If an agent asks for more information, use respond_to_user to ask the user for that information
+- After every send_message_to_agent call, use respond_to_user to relay the agent's response to the user
+- If an agent doesn't respond appropriately, you can try discovering different agents`;
 
 /**
  * Helper function to extract text from agent response
@@ -683,12 +722,18 @@ async function main() {
     const agent = createAgent({
       model: model,
       systemPrompt: systemPrompt,
-      tools: [discoverAgentsTool, getAgentCardTool, sendMessageToAgentTool],
+      tools: [
+        discoverAgentsTool,
+        getAgentCardTool,
+        respondToUserTool,
+        sendMessageToAgentTool,
+      ],
     });
 
     console.log("✅ Agent created with tools:");
     console.log("   - discover_agents");
     console.log("   - get_agent_card");
+    console.log("   - respond_to_user");
     console.log("   - send_message_to_agent\n");
 
     // Get query from args or interactive mode
@@ -706,11 +751,19 @@ async function main() {
 
       console.log("\n📤 Agent Response:\n");
       if (response.messages && response.messages.length > 0) {
-        // Extract agent response from tool results
+        // Extract responses from tool results and assistant messages
         for (const msg of response.messages) {
           if (msg.role === "tool") {
             try {
               const toolResult = JSON.parse(msg.content);
+
+              // Handle respond_to_user tool
+              if (toolResult.success && toolResult.message) {
+                console.log(`   💬 ${toolResult.message}\n`);
+                continue;
+              }
+
+              // Handle send_message_to_agent tool result
               if (toolResult.success && toolResult.response?.result) {
                 const result = toolResult.response.result;
                 if (result.kind === "message" && result.parts) {
@@ -805,11 +858,19 @@ async function main() {
 
             console.log("\n📤 Agent Response:\n");
             if (response.messages && response.messages.length > 0) {
-              // Extract agent response from tool results
+              // Extract responses from tool results and assistant messages
               for (const msg of response.messages) {
                 if (msg.role === "tool") {
                   try {
                     const toolResult = JSON.parse(msg.content);
+
+                    // Handle respond_to_user tool
+                    if (toolResult.success && toolResult.message) {
+                      console.log(`   💬 ${toolResult.message}\n`);
+                      continue;
+                    }
+
+                    // Handle send_message_to_agent tool result
                     if (toolResult.success) {
                       if (toolResult.contextId) {
                         currentContextId = toolResult.contextId;
