@@ -13,10 +13,14 @@ export class X402Service {
     this.provider = new ethers.JsonRpcProvider(HEDERA_CONFIG.JSON_RPC_URL);
     this.wallet = new ethers.Wallet(HEDERA_CONFIG.PRIVATE_KEY, this.provider);
     this.mirrorNodeURL = HEDERA_CONFIG.MIRROR_NODE_URL;
-    
+
     // Payment requests tracking
     this.pendingPayments = new Map();
-    
+
+    // Verified payment contexts (contextId -> payment info)
+    // Once a contextId is verified, all subsequent messages in that context don't need payment
+    this.verifiedContexts = new Map();
+
     // x402 Facilitator for payment verification
     this.facilitator = new X402Facilitator(facilitatorURL);
   }
@@ -35,15 +39,18 @@ export class X402Service {
       requestId,
       description,
       expiry = Date.now() + 3600000, // 1 hour default
-      facilitatorURL = this.facilitator.facilitatorURL
+      facilitatorURL = this.facilitator.facilitatorURL,
     } = paymentRequest;
 
     // Convert recipient to proper format (default to owner address - agents receive payments)
-    const recipientAddress = recipient || HEDERA_CONFIG.OWNER_EVM_ADDRESS || HEDERA_CONFIG.EVM_ADDRESS;
+    const recipientAddress =
+      recipient || HEDERA_CONFIG.OWNER_EVM_ADDRESS || HEDERA_CONFIG.EVM_ADDRESS;
 
     // x402 payment request format (based on x402-hedera spec)
     const paymentDetails = {
-      requestId: requestId || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      requestId:
+        requestId ||
+        `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       amount: amount.toString(),
       token,
       address: recipientAddress, // x402 uses "address" not "recipient"
@@ -51,7 +58,7 @@ export class X402Service {
       expiry,
       network: HEDERA_CONFIG.NETWORK,
       chainId: HEDERA_CONFIG.CHAIN_ID.toString(),
-      facilitator: facilitatorURL // Facilitator URL for payment processing
+      facilitator: facilitatorURL, // Facilitator URL for payment processing
     };
 
     // Store for verification
@@ -59,7 +66,7 @@ export class X402Service {
       ...paymentDetails,
       recipient: recipientAddress, // Keep for backward compatibility
       status: "pending",
-      createdAt: Date.now()
+      createdAt: Date.now(),
     });
 
     // x402 standard response headers
@@ -69,7 +76,7 @@ export class X402Service {
       "Payment-Address": recipientAddress,
       "Payment-Amount": amount.toString(),
       "Payment-Token": token,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
     };
   }
 
@@ -82,9 +89,10 @@ export class X402Service {
   async verifyPayment(paymentProof, expectedPayment) {
     try {
       // Extract txHash from payment proof
-      const txHash = typeof paymentProof === "string" 
-        ? paymentProof 
-        : paymentProof?.txHash || paymentProof?.paymentProof;
+      const txHash =
+        typeof paymentProof === "string"
+          ? paymentProof
+          : paymentProof?.txHash || paymentProof?.paymentProof;
 
       if (!txHash) {
         return { verified: false, error: "No payment proof provided" };
@@ -122,13 +130,13 @@ export class X402Service {
   parsePaymentHeader(paymentHeader) {
     try {
       if (!paymentHeader) return null;
-      
+
       // x402 standard: X-Payment header contains payment proof
       // Format can be JSON or simple txHash string
       if (paymentHeader.startsWith("{")) {
         return JSON.parse(paymentHeader);
       }
-      
+
       // Simple txHash format
       return { txHash: paymentHeader };
     } catch (error) {
@@ -146,7 +154,10 @@ export class X402Service {
   async executePayment(paymentDetails, payerPrivateKey = null) {
     try {
       // Use facilitator to execute payment
-      return await this.facilitator.executePayment(paymentDetails, payerPrivateKey);
+      return await this.facilitator.executePayment(
+        paymentDetails,
+        payerPrivateKey
+      );
     } catch (error) {
       console.error("Error executing payment:", error);
       throw error;
@@ -160,6 +171,57 @@ export class X402Service {
    */
   getPaymentStatus(requestId) {
     return this.pendingPayments.get(requestId) || null;
+  }
+
+  /**
+   * Check if a contextId has verified payment
+   * Used for multi-turn conversations - once verified, no payment needed for subsequent messages
+   * @param {string} contextId - A2A context ID
+   * @returns {boolean}
+   */
+  isContextVerified(contextId) {
+    if (!contextId) return false;
+    const verified = this.verifiedContexts.get(contextId);
+    if (!verified) return false;
+
+    // Optional: Check if verification has expired (e.g., after 1 hour)
+    const expiryTime = verified.verifiedAt + (verified.expiresIn || 3600000); // Default 1 hour
+    if (Date.now() > expiryTime) {
+      this.verifiedContexts.delete(contextId);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Mark a contextId as verified (payment verified)
+   * @param {string} contextId - A2A context ID
+   * @param {string} txHash - Payment transaction hash
+   * @param {Object} paymentRequest - Payment request details
+   * @param {number} expiresIn - Expiry time in milliseconds (default: 1 hour)
+   */
+  verifyContext(contextId, txHash, paymentRequest, expiresIn = 3600000) {
+    if (!contextId) return;
+
+    this.verifiedContexts.set(contextId, {
+      txHash,
+      requestId: paymentRequest.requestId,
+      verifiedAt: Date.now(),
+      expiresIn,
+      amount: paymentRequest.amount,
+      token: paymentRequest.token || "HBAR",
+    });
+  }
+
+  /**
+   * Get verified context info
+   * @param {string} contextId - A2A context ID
+   * @returns {Object|null}
+   */
+  getVerifiedContext(contextId) {
+    if (!contextId) return null;
+    return this.verifiedContexts.get(contextId) || null;
   }
 
   /**
@@ -177,4 +239,3 @@ export class X402Service {
     }
   }
 }
-

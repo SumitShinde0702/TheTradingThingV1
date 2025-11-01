@@ -72,16 +72,42 @@ export function createA2ARoutes(agentManager, a2aService) {
       if (agent.requiresPayment) {
         const x402Service = agentManager.getX402Service();
 
-        // Extract payment proof from:
-        // 1. HTTP header: X-Payment
-        // 2. JSON-RPC message metadata: params.message.metadata.payment
-        const paymentHeader = req.headers["x-payment"] || req.headers["payment"];
-        const paymentMetadata =
-          req.body?.params?.message?.metadata?.payment;
-        const txHash = paymentHeader || paymentMetadata?.txHash;
+        // Extract contextId from message (used for multi-turn conversations)
+        const contextId =
+          req.body?.params?.message?.contextId ||
+          req.body?.params?.message?.taskId; // Fallback to taskId if no contextId
 
-        // If no payment proof provided, return HTTP 402 + JSON-RPC error
-        if (!txHash) {
+        // Check if this context already has verified payment (multi-turn support)
+        if (contextId && x402Service.isContextVerified(contextId)) {
+          // Context already verified - skip payment check, proceed directly
+          console.log(
+            `[A2A Payment] Context ${contextId} already verified, skipping payment check`
+          );
+          // Inject payment verification status for executor
+          if (!req.body.params?.message?.metadata) {
+            if (!req.body.params) {
+              req.body.params = {};
+            }
+            if (!req.body.params.message) {
+              req.body.params.message = {};
+            }
+            req.body.params.message.metadata = {};
+          }
+          const verifiedContext = x402Service.getVerifiedContext(contextId);
+          req.body.params.message.metadata.paymentVerified = true;
+          req.body.params.message.metadata.paymentTxHash = verifiedContext.txHash;
+          req.body.params.message.metadata.paymentRequestId = verifiedContext.requestId;
+        } else {
+          // Extract payment proof from:
+          // 1. HTTP header: X-Payment
+          // 2. JSON-RPC message metadata: params.message.metadata.payment
+          const paymentHeader = req.headers["x-payment"] || req.headers["payment"];
+          const paymentMetadata =
+            req.body?.params?.message?.metadata?.payment;
+          const txHash = paymentHeader || paymentMetadata?.txHash;
+
+          // If no payment proof provided, return HTTP 402 + JSON-RPC error
+          if (!txHash) {
           const recipient =
             agent.walletAddress ||
             HEDERA_CONFIG.OWNER_EVM_ADDRESS ||
@@ -154,7 +180,15 @@ export function createA2ARoutes(agentManager, a2aService) {
             });
           }
 
-          // Payment verified ✅ - inject into message metadata for executor
+          // Payment verified ✅ - mark context as verified for multi-turn conversations
+          if (contextId) {
+            x402Service.verifyContext(contextId, txHash, paymentRequest);
+            console.log(
+              `[A2A Payment] Context ${contextId} verified with payment ${txHash}`
+            );
+          }
+
+          // Inject payment verification status into message metadata for executor
           if (!req.body.params?.message?.metadata) {
             if (!req.body.params) {
               req.body.params = {};
@@ -169,6 +203,7 @@ export function createA2ARoutes(agentManager, a2aService) {
             paymentRequest.requestId || `req_${Date.now()}`;
           req.body.params.message.metadata.paymentTxHash = txHash;
         }
+        } // End else block for payment check
       }
 
       // Payment OK or not required - pass to A2A router

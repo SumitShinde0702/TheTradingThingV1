@@ -1,10 +1,16 @@
 /**
- * Example: Agent-to-Agent communication using A2A protocol with payment
+ * Example: Multi-turn Agent-to-Agent communication using A2A protocol with payment
  *
- * This demonstrates how two agents can communicate using the A2A protocol,
+ * This demonstrates a multi-turn conversation between agents using the A2A protocol,
  * including handling payment requirements via x402 protocol.
- * TradingAgent sends a message to PaymentProcessor via A2A, handles payment,
- * and retries with payment proof.
+ *
+ * Flow:
+ * 1. TradingAgent sends first message to PaymentProcessor → Payment required → Payment made
+ * 2. PaymentProcessor replies (turn 1 response)
+ * 3. TradingAgent sends second message (same context, no payment needed) → PaymentProcessor replies
+ *
+ * This demonstrates context-based payment verification - once a context is verified,
+ * subsequent messages in that context don't require payment again.
  *
  * Usage:
  *   node src/examples/a2a-agent-communication-example.js
@@ -78,172 +84,240 @@ async function main() {
     const client = new A2AClient(clientBaseUrl);
     console.log(`   ✅ A2A Client created for ${clientBaseUrl}\n`);
 
-    // Step 4: Send message from TradingAgent to PaymentProcessor
-    console.log(
-      "💬 Step 4: TradingAgent sending message to PaymentProcessor..."
-    );
-    const message =
-      "Hello! I'm TradingAgent. Can you help me process a payment of 1 HBAR for a trading service?";
-    console.log(`   Message: "${message}"\n`);
-
+    // Step 4: Generate contextId for multi-turn conversation
     const { v4: uuidv4 } = await import("uuid");
+    const contextId = `ctx_${Date.now()}_${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+    console.log(
+      `🔗 Step 4: Generated context ID for conversation: ${contextId}\n`
+    );
 
-    // Create MessageSendParams object with message property
-    const params = {
-      message: {
-        kind: "message",
-        role: "user",
-        parts: [{ kind: "text", text: message }],
-        messageId: uuidv4(),
-        metadata: {
-          fromAgentId: tradingAgent.id,
-          fromAgentName: tradingAgent.name,
+    // ========================================
+    // TURN 1: First message (requires payment)
+    // ========================================
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+    console.log("💬 TURN 1: TradingAgent → PaymentProcessor");
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    );
+
+    const message1 =
+      "Hello! I'm TradingAgent. Can you help me process a payment of 1 HBAR for a trading service?";
+    console.log(`   Message: "${message1}"\n`);
+
+    // Helper function to send message with payment handling
+    async function sendMessageWithPayment(
+      messageText,
+      contextId,
+      paymentTxHash = null
+    ) {
+      const messageId = uuidv4();
+      const params = {
+        message: {
+          kind: "message",
+          role: "user",
+          parts: [{ kind: "text", text: messageText }],
+          messageId: messageId,
+          contextId: contextId, // Use same contextId for multi-turn
+          metadata: {
+            fromAgentId: tradingAgent.id,
+            fromAgentName: tradingAgent.name,
+            ...(paymentTxHash
+              ? {
+                  payment: {
+                    txHash: paymentTxHash,
+                  },
+                }
+              : {}),
+          },
         },
-      },
-    };
+      };
 
-    console.log("   Sending A2A message/send request...\n");
+      try {
+        const httpResponse = await axios.post(
+          `${SERVER_URL}/api/agents/${paymentAgent.id}/a2a`,
+          {
+            jsonrpc: "2.0",
+            id: messageId,
+            method: "message/send",
+            params: params,
+          },
+          {
+            validateStatus: (status) => status === 200 || status === 402,
+          }
+        );
 
-    // Make direct HTTP call to handle 402 payment responses properly
-    // (A2A client may not expose HTTP status codes directly)
-    let response;
-    let paymentTxHash = null;
+        // Check if payment is required (HTTP 402)
+        if (httpResponse.status === 402) {
+          const jsonRpcResponse = httpResponse.data;
+          const paymentDetails = jsonRpcResponse.error?.data?.payment;
 
-    try {
-      const httpResponse = await axios.post(
-        `${SERVER_URL}/api/agents/${paymentAgent.id}/a2a`,
-        {
-          jsonrpc: "2.0",
-          id: params.message.messageId,
-          method: "message/send",
-          params: params,
-        },
-        {
-          validateStatus: (status) => status === 200 || status === 402, // Accept both 200 and 402
-        }
-      );
+          if (paymentDetails) {
+            console.log("💳 Payment required!\n");
+            console.log("📋 Payment Details:");
+            console.log(
+              `   Amount: ${paymentDetails.amount} ${paymentDetails.token}`
+            );
+            console.log(`   Address: ${paymentDetails.address}`);
+            console.log(`   Request ID: ${paymentDetails.requestId}\n`);
 
-      // Check if payment is required (HTTP 402)
-      if (httpResponse.status === 402) {
-        console.log("💳 Payment required!\n");
+            // Execute payment
+            console.log("💰 Executing payment...");
+            const txHash = await executePayment(paymentDetails);
+            console.log(`   ✅ Payment executed! TxHash: ${txHash}\n`);
 
-        const jsonRpcResponse = httpResponse.data;
-        const paymentDetails = jsonRpcResponse.error?.data?.payment;
+            // Wait for transaction to be indexed
+            console.log(
+              "⏳ Waiting 10 seconds for transaction to be indexed...\n"
+            );
+            await new Promise((resolve) => setTimeout(resolve, 10000));
 
-        if (paymentDetails) {
-          console.log("📋 Payment Details:");
-          console.log(
-            `   Amount: ${paymentDetails.amount} ${paymentDetails.token}`
-          );
-          console.log(`   Address: ${paymentDetails.address}`);
-          console.log(`   Request ID: ${paymentDetails.requestId}\n`);
-
-          // Execute payment
-          console.log("💰 Executing payment...");
-          paymentTxHash = await executePayment(paymentDetails);
-          console.log(`   ✅ Payment executed! TxHash: ${paymentTxHash}\n`);
-
-          // Wait a bit for transaction to be indexed by Hedera mirror node
-          console.log(
-            "⏳ Waiting 10 seconds for transaction to be indexed...\n"
-          );
-          await new Promise((resolve) => setTimeout(resolve, 10000));
-
-          // Retry request with payment proof
-          console.log("🔄 Retrying request with payment proof...");
-          const retryResponse = await axios.post(
-            `${SERVER_URL}/api/agents/${paymentAgent.id}/a2a`,
-            {
-              jsonrpc: "2.0",
-              id: params.message.messageId,
-              method: "message/send",
-              params: {
-                ...params,
-                message: {
-                  ...params.message,
-                  metadata: {
-                    ...params.message.metadata,
-                    payment: {
-                      requestId: paymentDetails.requestId,
-                      txHash: paymentTxHash,
-                      amount: paymentDetails.amount,
-                      token: paymentDetails.token,
-                    },
+            // Retry request with payment proof
+            console.log("🔄 Retrying request with payment proof...");
+            const retryParams = {
+              ...params,
+              message: {
+                ...params.message,
+                metadata: {
+                  ...params.message.metadata,
+                  payment: {
+                    requestId: paymentDetails.requestId,
+                    txHash: txHash,
+                    amount: paymentDetails.amount,
+                    token: paymentDetails.token,
                   },
                 },
               },
-            },
-            {
-              headers: {
-                "X-Payment": paymentTxHash, // Payment proof in header
-              },
-            }
-          );
+            };
 
-          response = retryResponse.data;
+            const retryResponse = await axios.post(
+              `${SERVER_URL}/api/agents/${paymentAgent.id}/a2a`,
+              {
+                jsonrpc: "2.0",
+                id: messageId,
+                method: "message/send",
+                params: retryParams,
+              },
+              {
+                headers: {
+                  "X-Payment": txHash,
+                },
+              }
+            );
+
+            return { response: retryResponse.data, txHash };
+          } else {
+            throw new Error("Payment required but no payment details provided");
+          }
         } else {
-          throw new Error("Payment required but no payment details provided");
+          // Normal 200 response
+          return { response: httpResponse.data, txHash: paymentTxHash };
+        }
+      } catch (error) {
+        if (error.response?.status === 402) {
+          throw new Error(
+            `Payment required: ${JSON.stringify(error.response.data)}`
+          );
+        }
+        throw error;
+      }
+    }
+
+    // Helper function to extract and display response
+    function displayResponse(response, turnNumber) {
+      console.log(`\n   ✅ Turn ${turnNumber} Response:`);
+      console.log(`   Response type: ${response.result?.kind || "unknown"}`);
+
+      if (response.result?.kind === "message") {
+        const responseText = response.result.parts
+          .filter((p) => p.kind === "text")
+          .map((p) => p.text)
+          .join("\n");
+        console.log(`   PaymentProcessor: "${responseText}"\n`);
+      } else if (response.result?.kind === "status-update") {
+        const statusUpdate = response.result;
+        console.log(`   Status: ${statusUpdate.status?.state}`);
+
+        if (statusUpdate.status?.message) {
+          const responseText = statusUpdate.status.message.parts
+            .filter((p) => p.kind === "text")
+            .map((p) => p.text)
+            .join("\n");
+          console.log(`   PaymentProcessor: "${responseText}"\n`);
+        }
+      } else if (response.result?.kind === "task") {
+        const task = response.result;
+        console.log(`   Task ID: ${task.id}`);
+        console.log(`   Task state: ${task.status?.state}`);
+
+        if (task.status?.message) {
+          const responseText = task.status.message.parts
+            .filter((p) => p.kind === "text")
+            .map((p) => p.text)
+            .join("\n");
+          console.log(`   PaymentProcessor: "${responseText}"\n`);
         }
       } else {
-        // Normal 200 response (no payment required)
-        response = httpResponse.data;
+        console.log("   Full response:", JSON.stringify(response, null, 2));
       }
-    } catch (error) {
-      if (error.response?.status === 402) {
-        // Handle 402 that wasn't caught above (shouldn't happen, but just in case)
-        throw new Error(
-          `Payment required: ${JSON.stringify(error.response.data)}`
-        );
-      }
-      throw error;
     }
 
-    // Process response
-    console.log("\n   ✅ Response received:");
-    console.log("   Response type:", response.result?.kind || "unknown");
+    // Send first message
+    console.log("   Sending A2A message/send request...\n");
+    const turn1Result = await sendMessageWithPayment(message1, contextId);
+    const paymentTxHash = turn1Result.txHash;
+    displayResponse(turn1Result.response, 1);
 
-    if (response.result?.kind === "message") {
-      const responseText = response.result.parts
-        .filter((p) => p.kind === "text")
-        .map((p) => p.text)
-        .join("\n");
-      console.log(`   Agent response: "${responseText}"\n`);
-    } else if (response.result?.kind === "status-update") {
-      const statusUpdate = response.result;
-      console.log(`   Status: ${statusUpdate.status?.state}`);
+    // Wait a moment between turns
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      if (statusUpdate.status?.message) {
-        const responseText = statusUpdate.status.message.parts
-          .filter((p) => p.kind === "text")
-          .map((p) => p.text)
-          .join("\n");
-        console.log(`   Agent response: "${responseText}"\n`);
-      }
-    } else if (response.result?.kind === "task") {
-      const task = response.result;
-      console.log(`   Task ID: ${task.id}`);
-      console.log(`   Task state: ${task.status?.state}`);
+    // ========================================
+    // TURN 2: Second message (same context, NO payment needed)
+    // ========================================
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+    console.log("💬 TURN 2: TradingAgent → PaymentProcessor (Same Context)");
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    );
 
-      if (task.status?.message) {
-        const responseText = task.status.message.parts
-          .filter((p) => p.kind === "text")
-          .map((p) => p.text)
-          .join("\n");
-        console.log(`   Agent response: "${responseText}"\n`);
-      }
-    } else {
-      console.log("   Full response:", JSON.stringify(response, null, 2));
-    }
+    const message2 =
+      "Thank you! Can you also check my payment history and confirm the transaction was successful?";
+    console.log(`   Message: "${message2}"\n`);
+    console.log(
+      `   ⚡ Using same contextId (${contextId}) - payment already verified!\n`
+    );
 
-    if (paymentTxHash) {
-      console.log(
-        "✨ Example complete! TradingAgent successfully communicated with PaymentProcessor using A2A protocol with payment.\n"
-      );
-    } else {
-      console.log(
-        "✨ Example complete! TradingAgent successfully communicated with PaymentProcessor using A2A protocol.\n"
-      );
-    }
+    // Send second message with same contextId and paymentTxHash
+    // Server should recognize context is already verified and skip payment check
+    console.log("   Sending A2A message/send request...\n");
+    const turn2Result = await sendMessageWithPayment(
+      message2,
+      contextId,
+      paymentTxHash
+    );
+    displayResponse(turn2Result.response, 2);
+
+    // Final summary
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    );
+    console.log("✨ Multi-Turn Conversation Complete!");
+    console.log(
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    );
+    console.log(`   Context ID: ${contextId}`);
+    console.log(`   Payment TxHash: ${paymentTxHash}`);
+    console.log(
+      `   ✅ Turn 1: Required payment, verified context ${contextId}`
+    );
+    console.log(
+      `   ✅ Turn 2: Context already verified, no payment required\n`
+    );
   } catch (error) {
     console.error("\n❌ Error:", error.message);
     if (error.response) {
