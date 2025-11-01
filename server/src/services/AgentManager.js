@@ -13,41 +13,149 @@ export class AgentManager {
     this.erc8004Service = new ERC8004Service();
     this.x402Service = new X402Service();
     this.groqService = new GroqService();
-    
+
     // Capability index for discovery
     this.capabilityIndex = new Map(); // capability -> Set of agentIds
   }
 
   /**
-   * Register a new agent
+   * Find existing agent on-chain by endpoint URI
+   * @param {string} endpoint - Agent endpoint URI
+   * @param {string} ownerAddress - Owner address to filter by
+   * @returns {Promise<string|null>} AgentId if found, null otherwise
+   */
+  async findExistingAgentByEndpoint(endpoint, ownerAddress) {
+    try {
+      // Query recent Registered events for the owner
+      const currentBlock = await this.erc8004Service.provider.getBlockNumber();
+      const fromBlock = Math.max(0, currentBlock - 100000); // Last 100k blocks
+
+      const events = await this.erc8004Service.identityRegistry.queryFilter(
+        "Registered",
+        fromBlock,
+        "latest"
+      );
+
+      // Extract agent type from endpoint (e.g., "trading", "payment", "analyzer")
+      // This is the last part of the path after "/api/agents/"
+      const extractAgentType = (uri) => {
+        const match = uri.match(/\/api\/agents\/([^\/\?]+)/);
+        return match ? match[1].toLowerCase() : null;
+      };
+
+      const targetAgentType = extractAgentType(endpoint);
+
+      if (!targetAgentType) {
+        // Can't determine agent type from endpoint, skip check
+        return null;
+      }
+
+      // Find event where owner matches and endpoint contains same agent type
+      for (const event of events) {
+        try {
+          const parsed = event.args;
+          if (parsed.owner.toLowerCase() === ownerAddress.toLowerCase()) {
+            const tokenURI = parsed.tokenURI || "";
+            const uriAgentType = extractAgentType(tokenURI);
+
+            // Match if agent type matches (e.g., both are "trading")
+            if (uriAgentType && uriAgentType === targetAgentType) {
+              const agentId = parsed.agentId.toString();
+
+              // Verify agent still exists and owner still matches
+              try {
+                const currentOwner = await this.erc8004Service.getAgentOwner(
+                  agentId
+                );
+                if (currentOwner.toLowerCase() === ownerAddress.toLowerCase()) {
+                  return agentId;
+                }
+              } catch {
+                // Agent might have been burned/transferred, skip
+                continue;
+              }
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.warn(`Error finding existing agent:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Register a new agent or load existing one
    * @param {Object} agentConfig - Agent configuration
+   * @param {boolean} skipOnChainCheck - Skip checking for existing on-chain agent (default: false)
    * @returns {Promise<Agent>}
    */
-  async registerAgent(agentConfig) {
+  async registerAgent(agentConfig, skipOnChainCheck = false) {
     try {
       const agent = new Agent(agentConfig);
-      
+
       // Register with ERC-8004 if not already registered
       if (!agent.registered && !agent.id) {
-        const registration = await agent.register(this.erc8004Service);
-        agent.id = registration.agentId;
+        // Check if agent with this endpoint already exists on-chain
+        if (!skipOnChainCheck && agentConfig.endpoint) {
+          const { HEDERA_CONFIG } = await import("../config/hedera.js");
+          const ownerAddress =
+            HEDERA_CONFIG.OWNER_EVM_ADDRESS || HEDERA_CONFIG.EVM_ADDRESS;
+
+          const existingAgentId = await this.findExistingAgentByEndpoint(
+            agentConfig.endpoint,
+            ownerAddress
+          );
+
+          if (existingAgentId) {
+            console.log(
+              `🔍 Found existing on-chain agent for ${agent.name}: ID ${existingAgentId}`
+            );
+            agent.id = existingAgentId;
+            agent.registered = true;
+            // Verify agent exists
+            try {
+              const owner = await this.erc8004Service.getAgentOwner(
+                existingAgentId
+              );
+              agent.walletAddress = owner;
+            } catch (error) {
+              console.warn(
+                `Agent ${existingAgentId} not found on-chain, will register new`
+              );
+              agent.id = null;
+              agent.registered = false;
+            }
+          }
+        }
+
+        // Only register on-chain if we didn't find an existing agent
+        if (!agent.id) {
+          const registration = await agent.register(this.erc8004Service);
+          agent.id = registration.agentId;
+        }
       }
-      
+
       // Add to manager
       this.agents.set(agent.id, agent);
       if (agent.name) {
         this.agentsByName.set(agent.name, agent);
       }
-      
+
       // Index capabilities
-      agent.getCapabilities().forEach(capability => {
+      agent.getCapabilities().forEach((capability) => {
         if (!this.capabilityIndex.has(capability)) {
           this.capabilityIndex.set(capability, new Set());
         }
         this.capabilityIndex.get(capability).add(agent.id);
       });
-      
-      console.log(`✅ Agent registered: ${agent.name} (ID: ${agent.id})`);
+
+      const action = agent.registered ? "loaded" : "registered";
+      console.log(`✅ Agent ${action}: ${agent.name} (ID: ${agent.id})`);
       return agent;
     } catch (error) {
       console.error("Error registering agent:", error);
@@ -89,8 +197,8 @@ export class AgentManager {
   discoverAgentsByCapability(capability) {
     const agentIds = this.capabilityIndex.get(capability) || new Set();
     return Array.from(agentIds)
-      .map(id => this.agents.get(id))
-      .filter(agent => agent && agent.status === "online");
+      .map((id) => this.agents.get(id))
+      .filter((agent) => agent && agent.status === "online");
   }
 
   /**
@@ -113,13 +221,13 @@ export class AgentManager {
     const agent = this.agents.get(agentId);
     if (agent) {
       // Remove from capability index
-      agent.getCapabilities().forEach(capability => {
+      agent.getCapabilities().forEach((capability) => {
         const agentSet = this.capabilityIndex.get(capability);
         if (agentSet) {
           agentSet.delete(agentId);
         }
       });
-      
+
       this.agents.delete(agentId);
       if (agent.name) {
         this.agentsByName.delete(agent.name);
@@ -171,7 +279,7 @@ export class AgentManager {
         agent,
         message,
         fromAgentId,
-        context
+        context,
       });
     } catch (error) {
       console.error(`Error processing AI message for agent ${agentId}:`, error);
@@ -180,4 +288,3 @@ export class AgentManager {
     }
   }
 }
-

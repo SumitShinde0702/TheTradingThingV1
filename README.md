@@ -67,14 +67,28 @@ X402_FACILITATOR_URL=https://x402-hedera-production.up.railway.app
 
 **See [server/ENV_SETUP.md](./server/ENV_SETUP.md) for complete setup instructions.**
 
-### 3. Install Dependencies
+### 3. Compile Smart Contracts
+
+**⚠️ IMPORTANT: You must compile the contracts first!**
+
+The server requires the compiled ABI files from the ERC-8004 contracts. Compile them before starting the server:
 
 ```bash
-cd server
+cd erc-8004-contracts
+npm install
+npx hardhat compile
+```
+
+This will generate the ABI JSON files in `erc-8004-contracts/artifacts/contracts/` that the server needs to interact with the contracts.
+
+### 4. Install Server Dependencies
+
+```bash
+cd ../server
 npm install
 ```
 
-### 4. Start the Server
+### 5. Start the Server
 
 ```bash
 npm start
@@ -82,7 +96,7 @@ npm start
 
 The server will start on `http://localhost:8443` (or `https://localhost:8443` if SSL certificates are configured).
 
-### 5. Verify It's Working
+### 6. Verify It's Working
 
 ```bash
 # Health check
@@ -188,6 +202,19 @@ For questions or issues:
 - Review the [server documentation](./server/README.md)
 - Check [testing guide](./server/TESTING.md) for troubleshooting
 - See [ENV_SETUP.md](./server/ENV_SETUP.md) for configuration help
+
+### Common Issues
+
+**Error: "no matching function (argument="key", value="register(string)")"**
+
+This error occurs when the smart contracts haven't been compiled yet. The server requires the ABI files from compiled contracts. To fix:
+
+```bash
+cd erc-8004-contracts
+npx hardhat compile
+```
+
+Make sure the ABI files exist in `erc-8004-contracts/artifacts/contracts/` before starting the server.
 
 ---
 
