@@ -278,6 +278,7 @@ const sendMessageToAgentTool = tool(
     const { agentId, message, contextId: providedContextId } = input;
 
     console.log("\n🛠️  [send_message_to_agent] Starting...");
+    console.log(`\nMessage: ${message}`);
     console.log(
       `   Input: { agentId: "${agentId}", message: "${message.substring(
         0,
@@ -446,6 +447,38 @@ const sendMessageToAgentTool = tool(
 
           const response = retryResponse.data;
           console.log("   ✅ Response received from agent");
+
+          // Log the response content
+          if (response.result) {
+            const result = response.result;
+            if (result.kind === "message" && result.parts) {
+              const textParts = result.parts
+                .filter((p) => p.kind === "text")
+                .map((p) => p.text);
+              if (textParts.length > 0) {
+                console.log(`   📝 Response text: ${textParts.join(" ")}`);
+              }
+            } else if (
+              result.kind === "status-update" &&
+              result.status?.message
+            ) {
+              const textParts = result.status.message.parts
+                .filter((p) => p.kind === "text")
+                .map((p) => p.text);
+              if (textParts.length > 0) {
+                console.log(`   📝 Response text: ${textParts.join(" ")}`);
+              }
+            } else if (result.kind === "task" && result.status?.message) {
+              const textParts = result.status.message.parts
+                .filter((p) => p.kind === "text")
+                .map((p) => p.text);
+              if (textParts.length > 0) {
+                console.log(`   📝 Response text: ${textParts.join(" ")}`);
+              }
+            }
+            console.log(`   📊 Response type: ${result.kind}`);
+          }
+
           console.log("✅ [send_message_to_agent] Completed\n");
 
           return JSON.stringify({
@@ -464,6 +497,35 @@ const sendMessageToAgentTool = tool(
       // Normal response
       const response = httpResponse.data;
       console.log("   ✅ Response received from agent");
+
+      // Log the response content
+      if (response.result) {
+        const result = response.result;
+        if (result.kind === "message" && result.parts) {
+          const textParts = result.parts
+            .filter((p) => p.kind === "text")
+            .map((p) => p.text);
+          if (textParts.length > 0) {
+            console.log(`   📝 Response text: ${textParts.join(" ")}`);
+          }
+        } else if (result.kind === "status-update" && result.status?.message) {
+          const textParts = result.status.message.parts
+            .filter((p) => p.kind === "text")
+            .map((p) => p.text);
+          if (textParts.length > 0) {
+            console.log(`   📝 Response text: ${textParts.join(" ")}`);
+          }
+        } else if (result.kind === "task" && result.status?.message) {
+          const textParts = result.status.message.parts
+            .filter((p) => p.kind === "text")
+            .map((p) => p.text);
+          if (textParts.length > 0) {
+            console.log(`   📝 Response text: ${textParts.join(" ")}`);
+          }
+        }
+        console.log(`   📊 Response type: ${result.kind}`);
+      }
+
       console.log("✅ [send_message_to_agent] Completed\n");
 
       return JSON.stringify({
@@ -644,8 +706,58 @@ async function main() {
 
       console.log("\n📤 Agent Response:\n");
       if (response.messages && response.messages.length > 0) {
-        const lastMessage = response.messages[response.messages.length - 1];
-        console.log(`   ${lastMessage.content}\n`);
+        // Extract agent response from tool results
+        for (const msg of response.messages) {
+          if (msg.role === "tool") {
+            try {
+              const toolResult = JSON.parse(msg.content);
+              if (toolResult.success && toolResult.response?.result) {
+                const result = toolResult.response.result;
+                if (result.kind === "message" && result.parts) {
+                  const textParts = result.parts
+                    .filter((p) => p.kind === "text")
+                    .map((p) => p.text);
+                  if (textParts.length > 0) {
+                    console.log(
+                      `   💬 ${
+                        toolResult.agentName || "Agent"
+                      }: ${textParts.join(" ")}\n`
+                    );
+                  }
+                } else if (
+                  result.kind === "status-update" &&
+                  result.status?.message
+                ) {
+                  const textParts = result.status.message.parts
+                    .filter((p) => p.kind === "text")
+                    .map((p) => p.text);
+                  if (textParts.length > 0) {
+                    console.log(
+                      `   💬 ${
+                        toolResult.agentName || "Agent"
+                      }: ${textParts.join(" ")}\n`
+                    );
+                  }
+                } else if (result.kind === "task" && result.status?.message) {
+                  const textParts = result.status.message.parts
+                    .filter((p) => p.kind === "text")
+                    .map((p) => p.text);
+                  if (textParts.length > 0) {
+                    console.log(
+                      `   💬 ${
+                        toolResult.agentName || "Agent"
+                      }: ${textParts.join(" ")}\n`
+                    );
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          } else if (msg.role === "assistant") {
+            console.log(`   ${msg.content}\n`);
+          }
+        }
       } else {
         console.log(`   ${JSON.stringify(response, null, 2)}\n`);
       }
@@ -693,16 +805,61 @@ async function main() {
 
             console.log("\n📤 Agent Response:\n");
             if (response.messages && response.messages.length > 0) {
-              // Show all messages to see tool calls
+              // Extract agent response from tool results
               for (const msg of response.messages) {
                 if (msg.role === "tool") {
-                  // Tool responses are already logged by the tools themselves
-                  // Just show a summary
                   try {
                     const toolResult = JSON.parse(msg.content);
-                    if (toolResult.success && toolResult.contextId) {
-                      currentContextId = toolResult.contextId;
-                      currentAgentId = toolResult.agentId;
+                    if (toolResult.success) {
+                      if (toolResult.contextId) {
+                        currentContextId = toolResult.contextId;
+                        currentAgentId = toolResult.agentId;
+                      }
+
+                      // Extract and display agent response from tool result
+                      if (toolResult.response?.result) {
+                        const result = toolResult.response.result;
+                        if (result.kind === "message" && result.parts) {
+                          const textParts = result.parts
+                            .filter((p) => p.kind === "text")
+                            .map((p) => p.text);
+                          if (textParts.length > 0) {
+                            console.log(
+                              `   💬 ${
+                                toolResult.agentName || "Agent"
+                              }: ${textParts.join(" ")}\n`
+                            );
+                          }
+                        } else if (
+                          result.kind === "status-update" &&
+                          result.status?.message
+                        ) {
+                          const textParts = result.status.message.parts
+                            .filter((p) => p.kind === "text")
+                            .map((p) => p.text);
+                          if (textParts.length > 0) {
+                            console.log(
+                              `   💬 ${
+                                toolResult.agentName || "Agent"
+                              }: ${textParts.join(" ")}\n`
+                            );
+                          }
+                        } else if (
+                          result.kind === "task" &&
+                          result.status?.message
+                        ) {
+                          const textParts = result.status.message.parts
+                            .filter((p) => p.kind === "text")
+                            .map((p) => p.text);
+                          if (textParts.length > 0) {
+                            console.log(
+                              `   💬 ${
+                                toolResult.agentName || "Agent"
+                              }: ${textParts.join(" ")}\n`
+                            );
+                          }
+                        }
+                      }
                     }
                   } catch (e) {
                     // Ignore parse errors
