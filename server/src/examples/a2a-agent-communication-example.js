@@ -1,8 +1,10 @@
 /**
- * Example: Agent-to-Agent communication using A2A protocol
+ * Example: Agent-to-Agent communication using A2A protocol with payment
  *
- * This demonstrates how two agents can communicate using the A2A protocol.
- * TradingAgent sends a message to PaymentProcessor via A2A.
+ * This demonstrates how two agents can communicate using the A2A protocol,
+ * including handling payment requirements via x402 protocol.
+ * TradingAgent sends a message to PaymentProcessor via A2A, handles payment,
+ * and retries with payment proof.
  *
  * Usage:
  *   node src/examples/a2a-agent-communication-example.js
@@ -10,8 +12,16 @@
 
 import { A2AClient } from "@a2a-js/sdk/client";
 import axios from "axios";
+import { ethers } from "ethers";
+import { HEDERA_CONFIG } from "../config/hedera.js";
 
 const SERVER_URL = process.env.SERVER_URL || "http://localhost:8443";
+
+// Payer wallet (client making payment - uses client account)
+const payerWallet = new ethers.Wallet(
+  HEDERA_CONFIG.CLIENT_PRIVATE_KEY,
+  new ethers.JsonRpcProvider(HEDERA_CONFIG.JSON_RPC_URL)
+);
 
 async function main() {
   console.log("🤝 A2A Agent-to-Agent Communication Example\n");
@@ -92,10 +102,103 @@ async function main() {
       },
     };
 
-    console.log("   Sending A2A message/send request...");
-    // Use the client's sendMessage method with params object
-    const response = await client.sendMessage(params);
+    console.log("   Sending A2A message/send request...\n");
 
+    // Make direct HTTP call to handle 402 payment responses properly
+    // (A2A client may not expose HTTP status codes directly)
+    let response;
+    let paymentTxHash = null;
+
+    try {
+      const httpResponse = await axios.post(
+        `${SERVER_URL}/api/agents/${paymentAgent.id}/a2a`,
+        {
+          jsonrpc: "2.0",
+          id: params.message.messageId,
+          method: "message/send",
+          params: params,
+        },
+        {
+          validateStatus: (status) => status === 200 || status === 402, // Accept both 200 and 402
+        }
+      );
+
+      // Check if payment is required (HTTP 402)
+      if (httpResponse.status === 402) {
+        console.log("💳 Payment required!\n");
+
+        const jsonRpcResponse = httpResponse.data;
+        const paymentDetails = jsonRpcResponse.error?.data?.payment;
+
+        if (paymentDetails) {
+          console.log("📋 Payment Details:");
+          console.log(
+            `   Amount: ${paymentDetails.amount} ${paymentDetails.token}`
+          );
+          console.log(`   Address: ${paymentDetails.address}`);
+          console.log(`   Request ID: ${paymentDetails.requestId}\n`);
+
+          // Execute payment
+          console.log("💰 Executing payment...");
+          paymentTxHash = await executePayment(paymentDetails);
+          console.log(`   ✅ Payment executed! TxHash: ${paymentTxHash}\n`);
+
+          // Wait a bit for transaction to be indexed by Hedera mirror node
+          console.log(
+            "⏳ Waiting 10 seconds for transaction to be indexed...\n"
+          );
+          await new Promise((resolve) => setTimeout(resolve, 10000));
+
+          // Retry request with payment proof
+          console.log("🔄 Retrying request with payment proof...");
+          const retryResponse = await axios.post(
+            `${SERVER_URL}/api/agents/${paymentAgent.id}/a2a`,
+            {
+              jsonrpc: "2.0",
+              id: params.message.messageId,
+              method: "message/send",
+              params: {
+                ...params,
+                message: {
+                  ...params.message,
+                  metadata: {
+                    ...params.message.metadata,
+                    payment: {
+                      requestId: paymentDetails.requestId,
+                      txHash: paymentTxHash,
+                      amount: paymentDetails.amount,
+                      token: paymentDetails.token,
+                    },
+                  },
+                },
+              },
+            },
+            {
+              headers: {
+                "X-Payment": paymentTxHash, // Payment proof in header
+              },
+            }
+          );
+
+          response = retryResponse.data;
+        } else {
+          throw new Error("Payment required but no payment details provided");
+        }
+      } else {
+        // Normal 200 response (no payment required)
+        response = httpResponse.data;
+      }
+    } catch (error) {
+      if (error.response?.status === 402) {
+        // Handle 402 that wasn't caught above (shouldn't happen, but just in case)
+        throw new Error(
+          `Payment required: ${JSON.stringify(error.response.data)}`
+        );
+      }
+      throw error;
+    }
+
+    // Process response
     console.log("\n   ✅ Response received:");
     console.log("   Response type:", response.result?.kind || "unknown");
 
@@ -105,6 +208,17 @@ async function main() {
         .map((p) => p.text)
         .join("\n");
       console.log(`   Agent response: "${responseText}"\n`);
+    } else if (response.result?.kind === "status-update") {
+      const statusUpdate = response.result;
+      console.log(`   Status: ${statusUpdate.status?.state}`);
+
+      if (statusUpdate.status?.message) {
+        const responseText = statusUpdate.status.message.parts
+          .filter((p) => p.kind === "text")
+          .map((p) => p.text)
+          .join("\n");
+        console.log(`   Agent response: "${responseText}"\n`);
+      }
     } else if (response.result?.kind === "task") {
       const task = response.result;
       console.log(`   Task ID: ${task.id}`);
@@ -121,9 +235,15 @@ async function main() {
       console.log("   Full response:", JSON.stringify(response, null, 2));
     }
 
-    console.log(
-      "✨ Example complete! TradingAgent successfully communicated with PaymentProcessor using A2A protocol.\n"
-    );
+    if (paymentTxHash) {
+      console.log(
+        "✨ Example complete! TradingAgent successfully communicated with PaymentProcessor using A2A protocol with payment.\n"
+      );
+    } else {
+      console.log(
+        "✨ Example complete! TradingAgent successfully communicated with PaymentProcessor using A2A protocol.\n"
+      );
+    }
   } catch (error) {
     console.error("\n❌ Error:", error.message);
     if (error.response) {
@@ -134,6 +254,44 @@ async function main() {
       console.error("\nStack trace:", error.stack);
     }
     process.exit(1);
+  }
+}
+
+/**
+ * Execute payment on Hedera network
+ */
+async function executePayment(paymentDetails) {
+  try {
+    const recipient =
+      paymentDetails.address ||
+      paymentDetails.recipient ||
+      HEDERA_CONFIG.OWNER_EVM_ADDRESS;
+    const amount = paymentDetails.amount || "0.1";
+
+    console.log(`   Recipient: ${recipient}`);
+    console.log(`   Amount: ${amount} HBAR`);
+
+    // Execute payment on Hedera
+    const tx = await payerWallet.sendTransaction({
+      to: recipient,
+      value: ethers.parseEther(amount),
+    });
+
+    console.log(`   Transaction sent: ${tx.hash}`);
+    console.log(`   Waiting for confirmation...`);
+
+    // Wait for confirmation
+    const receipt = await Promise.race([
+      tx.wait(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Transaction timeout")), 30000)
+      ),
+    ]);
+
+    return receipt.hash;
+  } catch (error) {
+    console.error("   ❌ Payment execution failed:", error.message);
+    throw error;
   }
 }
 

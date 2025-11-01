@@ -12,14 +12,18 @@ export class Agent {
     this.registered = config.registered || false;
     this.metadata = config.metadata || {};
     this.createdAt = config.createdAt || Date.now();
-    
+
     // Agent state
     this.status = config.status || "offline"; // online, offline, busy
     this.activeRequests = new Set();
-    
+
     // AI configuration
     this.aiEnabled = config.aiEnabled !== false; // Enable AI by default
     this.aiModel = config.aiModel || null; // Specific model override
+
+    // Payment configuration
+    this.requiresPayment = config.requiresPayment || false;
+    this.paymentAmount = config.paymentAmount || "1"; // Default 1 HBAR
   }
 
   /**
@@ -27,13 +31,14 @@ export class Agent {
    */
   async register(erc8004Service) {
     try {
-      const tokenURI = this.endpoint || `https://agent.${this.name}.local/metadata`;
+      const tokenURI =
+        this.endpoint || `https://agent.${this.name}.local/metadata`;
       const result = await erc8004Service.registerAgent(tokenURI);
-      
+
       this.id = result.agentId;
       this.registered = true;
       this.walletAddress = result.owner;
-      
+
       return result;
     } catch (error) {
       console.error(`Error registering agent ${this.name}:`, error);
@@ -102,8 +107,9 @@ export class Agent {
       createdAt: this.createdAt,
       activeRequests: Array.from(this.activeRequests).length,
       aiEnabled: this.aiEnabled,
-      aiModel: this.aiModel
+      aiModel: this.aiModel,
+      requiresPayment: this.requiresPayment,
+      paymentAmount: this.paymentAmount,
     };
   }
 }
-

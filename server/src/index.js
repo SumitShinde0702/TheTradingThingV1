@@ -139,13 +139,15 @@ async function initializeAgents() {
       `✅ ${tradingAgent.name} registered with ID: ${tradingAgent.id}`
     );
 
-    // Example Agent 2: Payment Processor
+    // Example Agent 2: Payment Processor (requires payment)
     const paymentAgent = await agentManager.registerAgent({
       name: "PaymentProcessor",
       description: "Handles payment processing and verification",
       capabilities: ["process_payment", "verify", "escrow"],
       endpoint: `https://localhost:${PORT}/api/agents/payment`,
       aiEnabled: true,
+      requiresPayment: true, // This agent requires payment for A2A requests
+      paymentAmount: "0.1", // 0.1 HBAR
       metadata: {
         type: "payment",
         version: "1.0.0",
