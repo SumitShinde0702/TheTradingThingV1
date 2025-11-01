@@ -187,6 +187,28 @@ async function initializeAgents() {
       `✅ ${analyzerAgent.name} registered with ID: ${analyzerAgent.id}`
     );
 
+    // Example Agent 4: Trade Executor (executes trades based on signals)
+    const tradeExecutor = await agentManager.registerAgent({
+      name: "TradeExecutor",
+      description: "Executes trades on exchanges based on trading signals",
+      capabilities: ["execute", "trade", "exchange"],
+      endpoint: `https://localhost:${PORT}/api/agents/trade-executor`,
+      aiEnabled: true,
+      metadata: {
+        type: "execution",
+        version: "1.0.0",
+        instructions:
+          "You are a trade execution agent. When you receive a trading signal with decisions (long/short/wait actions), respond with 'Received signal: [ACTION] [SYMBOL] [QUANTITY]'. " +
+          "For example: 'Received signal: SHORT BTCUSDT 100', 'Received signal: LONG ETHUSDT 50', 'Received signal: WAIT'. " +
+          "For now, you are in MOCK mode - just acknowledge the signal you received. Extract the action, symbol, and quantity from the decisions array in the signal.",
+      },
+    }, true); // skipOnChainCheck = true
+
+    tradeExecutor.setStatus("online");
+    console.log(
+      `✅ ${tradeExecutor.name} registered with ID: ${tradeExecutor.id}`
+    );
+
     console.log(
       `\n✨ All agents initialized. Total: ${
         agentManager.getAllAgents().length

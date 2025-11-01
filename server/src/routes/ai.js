@@ -955,6 +955,7 @@ export function createAIRoutes(agentManager) {
         }
       );
 
+
       // System prompt
       const systemPrompt = `You are a User Agent that helps users discover and communicate with specialized agents 
 on the Hedera blockchain using the A2A (Agent-to-Agent) protocol.
@@ -1002,6 +1003,9 @@ Key points:
 - The user wants to copy the trading decision (long/short/wait) at that moment - show the decisions prominently
 - The decisions array contains: action (long/short/wait), symbol, quantity, leverage, price - format this clearly
 - Also show chain_of_thought and input_prompt for context, but DECISIONS should be the main focus
+- When the user asks to execute trades or "execute trade", find the TradeExecutor agent using discover_agents
+- Send the trading signal (with decisions) directly to the TradeExecutor agent using send_message_to_agent
+- The TradeExecutor agent will receive the signal and respond with mock confirmation (e.g., "Received signal: SHORT BTCUSDT 100")
 - Local agents are preferred and checked first - these are agents registered on the local server
 - If blockchain discovery fails due to rate limits, work with local agents or inform the user
 - Communication happens via A2A (Agent-to-Agent) protocol over JSON-RPC

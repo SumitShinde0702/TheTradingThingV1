@@ -9,13 +9,12 @@ export function createPaymentRoutes(agentManager) {
   const router = express.Router();
   const x402Service = agentManager.getX402Service();
   
-  // Multiple RPC endpoints for fallback
+  // Multiple RPC endpoints for fallback - try all possible Hedera testnet RPC URLs
+  // Try HashIO first (most reliable), then others
   const RPC_ENDPOINTS = [
-    HEDERA_CONFIG.JSON_RPC_URL,
-    "https://testnet.hashio.io/api",
-    "https://testnet.hedera.com",
-    "https://testnet.hashio.io/api/v1/accounts",
-  ].filter((url, index, self) => self.indexOf(url) === index);
+    "https://testnet.hashio.io/api", // Primary HashIO (most reliable)
+    HEDERA_CONFIG.JSON_RPC_URL, // Config default (usually same as above)
+  ].filter((url, index, self) => self.indexOf(url) === index); // Remove duplicates
   
   // Aggressively suppress ethers.js provider warnings by intercepting stderr
   const originalStderrWrite = process.stderr.write.bind(process.stderr);
@@ -41,22 +40,18 @@ export function createPaymentRoutes(agentManager) {
     }
   };
   
-  // Create fresh wallet with specific RPC endpoint
+  // Create fresh wallet with specific RPC endpoint (matches working manual script)
   const createWallet = (rpcUrl = null) => {
-    const network = {
-      name: "hedera-testnet",
-      chainId: HEDERA_CONFIG.CHAIN_ID
-    };
-    
     const url = rpcUrl || RPC_ENDPOINTS[0];
     
     // Suppress ethers warnings temporarily
     suppressEthersWarnings();
     
     try {
-      // Create provider with staticNetwork to skip auto-detection (prevents spam)
-      const provider = new ethers.JsonRpcProvider(url, network, {
-        staticNetwork: true
+      // Match working script exactly: simple JsonRpcProvider with explicit network
+      const provider = new ethers.JsonRpcProvider(url, {
+        name: "hedera-testnet",
+        chainId: HEDERA_CONFIG.CHAIN_ID
       });
       
       return new ethers.Wallet(HEDERA_CONFIG.CLIENT_PRIVATE_KEY, provider);
@@ -306,11 +301,15 @@ export function createPaymentRoutes(agentManager) {
         // Try each RPC endpoint until one works
         for (let endpointIndex = 0; endpointIndex < RPC_ENDPOINTS.length; endpointIndex++) {
           const rpcUrl = RPC_ENDPOINTS[endpointIndex];
-          const endpointName = rpcUrl.includes('hashio') ? 'HashIO' : 
-                               rpcUrl.includes('hedera.com') ? 'Hedera Official' : 'Primary';
+          let endpointName = 'Primary';
+          if (rpcUrl.includes('hashio')) endpointName = 'HashIO';
+          else if (rpcUrl.includes('hedera.com')) endpointName = 'Hedera Official';
+          else if (rpcUrl.includes('publicnode')) endpointName = 'PublicNode';
+          else if (rpcUrl.includes('ankr')) endpointName = 'Ankr';
+          else if (rpcUrl.includes('rpc')) endpointName = 'RPC';
           
-          // HashIO gets more retries (5), others get 3
-          const maxRetriesPerEndpoint = endpointName === 'HashIO' ? 5 : 3;
+          // Use 5 retries (same as working manual script)
+          const maxRetriesPerEndpoint = 5;
           
           console.log(`   🔄 Trying ${endpointName} RPC endpoint (${maxRetriesPerEndpoint} attempts)...`);
           
@@ -323,19 +322,14 @@ export function createPaymentRoutes(agentManager) {
               suppressEthersWarnings();
               
               try {
-                // Create fresh wallet for THIS endpoint
+                // Create fresh wallet for THIS endpoint (matches working script pattern)
                 const freshWallet = createWallet(rpcUrl);
                 
-                // Add timeout to prevent hanging
-                tx = await Promise.race([
-                  freshWallet.sendTransaction({
-                    to: recipientAddress,
-                    value: ethers.parseEther(amount),
-                  }),
-                  new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error("Transaction send timeout (10s)")), 10000)
-                  )
-                ]);
+                // Send transaction (same as working script - no timeout, let ethers handle it)
+                tx = await freshWallet.sendTransaction({
+                  to: recipientAddress,
+                  value: ethers.parseEther(amount),
+                });
               } finally {
                 restoreConsoleError();
               }
@@ -350,8 +344,7 @@ export function createPaymentRoutes(agentManager) {
                                        error.code === 'ETIMEDOUT';
               
               if (attempt < maxRetriesPerEndpoint && isConnectionError) {
-                // Exponential backoff: 2s, 4s, 8s, 16s (for HashIO with 5 tries)
-                // For 3 tries: 2s, 4s, 8s
+                // EXPONENTIAL BACKOFF (same as manual script that works!): 2s, 4s, 8s, 16s
                 const delay = Math.min(2000 * Math.pow(2, attempt - 1), 16000);
                 console.log(`   ⚠️  Attempt ${attempt} failed: ${error.message.substring(0, 50)}...`);
                 console.log(`   ⏳ Retrying in ${delay/1000} seconds...`);
@@ -371,9 +364,9 @@ export function createPaymentRoutes(agentManager) {
             throw lastError || new Error("All RPC endpoints failed");
           }
           
-          // Small delay before switching endpoints
+          // Quick switch to next endpoint - don't wait long
           console.log(`   ⚠️  ${endpointName} unavailable, trying next endpoint...`);
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 500)); // Faster endpoint switching
         }
         
         if (!tx) {
