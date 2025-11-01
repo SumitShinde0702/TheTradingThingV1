@@ -162,12 +162,21 @@ export function createAgentRoutes(agentManager) {
             console.error("Payment proof:", paymentProof);
             console.error("Payment request:", paymentRequest);
             
-            return res.status(402).json({
+            // If verification failed but it's retryable (mirror node indexing delay), suggest retry
+            const statusCode = verification.retryable ? 402 : 402; // Still 402, but include retry hint
+            const response = {
               success: false,
               error: "Payment verification failed",
               details: verification.error || "Invalid payment proof",
               txHash: paymentProof.txHash || paymentProof
-            });
+            };
+            
+            if (verification.retryable) {
+              response.retryable = true;
+              response.suggestion = verification.suggestion || "Wait 10-30 seconds and retry with the same transaction hash";
+            }
+            
+            return res.status(statusCode).json(response);
           }
 
           console.log(`✅ Payment verified successfully`);

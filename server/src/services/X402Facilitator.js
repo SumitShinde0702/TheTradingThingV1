@@ -25,11 +25,24 @@ export class X402Facilitator {
   async verifyPayment(paymentProof, paymentRequest) {
     try {
       // Always try local verification first (faster, more reliable)
-      const localResult = await this.verifyPaymentLocal(paymentProof, paymentRequest);
+      let localResult = await this.verifyPaymentLocal(paymentProof, paymentRequest);
       
       // If local verification works, use it
       if (localResult.verified) {
         return localResult;
+      }
+
+      // If verification failed with retryable error (mirror node indexing), retry once after delay
+      if (localResult.retryable && !localResult.verified) {
+        console.log(`⏳ Retrying verification after 10 seconds (mirror node indexing delay)...`);
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        
+        localResult = await this.verifyPaymentLocal(paymentProof, paymentRequest);
+        
+        if (localResult.verified) {
+          console.log(`✅ Verification succeeded on retry!`);
+          return localResult;
+        }
       }
 
       // If local fails and we have external facilitator, try that
@@ -76,21 +89,27 @@ export class X402Facilitator {
       let response;
       let transaction = null;
       
+      // Try hash-based queries (may fail - mirror node doesn't always accept EVM hashes)
+      let hashQuerySuccess = false;
+      
       try {
-        // Method 1: Try direct query with EVM hash (no leading slash if hash starts with /)
+        // Method 1: Try direct query with EVM hash
         try {
           const url = `${HEDERA_CONFIG.MIRROR_NODE_URL}/transactions/${encodeURIComponent(txHash)}`;
-          response = await axios.get(url, { timeout: 15000 });
+          response = await axios.get(url, { timeout: 10000 });
           const transactions = response.data.transactions || [];
           transaction = transactions[0] || response.data;
           
           if (transaction && transaction.result) {
-            console.log(`✅ Found transaction via direct query`);
+            console.log(`✅ Found transaction via direct hash query`);
+            hashQuerySuccess = true;
           }
         } catch (err1) {
-          console.log(`Direct query failed (${err1.response?.status || err1.message}), trying query params...`);
-          
-          // Method 2: Try query params with hash (without 0x prefix)
+          // Continue to next method
+        }
+        
+        // Method 2: Try query params with hash (without 0x prefix)
+        if (!hashQuerySuccess) {
           try {
             const hashWithoutPrefix = txHash.replace(/^0x/, "");
             response = await axios.get(
@@ -99,7 +118,7 @@ export class X402Facilitator {
                 params: {
                   transactionhash: hashWithoutPrefix
                 },
-                timeout: 15000
+                timeout: 10000
               }
             );
             const transactions = response.data.transactions || [];
@@ -107,49 +126,299 @@ export class X402Facilitator {
             
             if (transaction && transaction.result) {
               console.log(`✅ Found transaction via query params (no prefix)`);
+              hashQuerySuccess = true;
             }
           } catch (err2) {
-            console.log(`Query params method failed, trying with 0x prefix...`);
+            // Continue to next method
+          }
+        }
+        
+        // Method 3: Try with 0x prefix in query
+        if (!hashQuerySuccess) {
+          try {
+            response = await axios.get(
+              `${HEDERA_CONFIG.MIRROR_NODE_URL}/transactions`,
+              {
+                params: {
+                  transactionhash: txHash
+                },
+                timeout: 10000
+              }
+            );
+            const transactions = response.data.transactions || [];
+            transaction = transactions[0];
             
-            // Method 3: Try with 0x prefix in query
+            if (transaction && transaction.result) {
+              console.log(`✅ Found transaction via query params (with prefix)`);
+              hashQuerySuccess = true;
+            }
+          } catch (err3) {
+            // All hash methods failed - will use account-based verification
+            console.log(`All hash query methods failed (expected - will use account-based verification)`);
+          }
+        }
+      } catch (err) {
+        // Hash queries failed - will fall through to account-based verification
+        console.log(`Hash query attempt failed, will try account-based verification`);
+      }
+
+      // Try RPC receipt as additional info (won't stop verification if it fails)
+      if (!transaction || !transaction.result) {
+        try {
+          const receipt = await this.provider.getTransactionReceipt(txHash);
+          if (receipt && receipt.status === 1) {
+            console.log(`Got RPC receipt - transaction confirmed on RPC`);
+            // Don't use receipt as transaction, but we know it's confirmed
+            // Continue to account-based verification to find the full transaction data
+          }
+        } catch (rpcErr) {
+          // RPC query failed - continue to account-based verification
+        }
+      }
+
+      // Try to extract from response if we got one
+      if (response) {
+        const transactions = response?.data?.transactions || [];
+        if (!transaction && transactions.length > 0) {
+          transaction = transactions[0];
+        }
+        if (!transaction && response?.data && response.data.result) {
+          transaction = response.data;
+        }
+      }
+      
+      // ALWAYS try account-based verification if hash query failed or found nothing
+      // This works because mirror node doesn't accept EVM hashes directly
+      if (!transaction || !transaction.result) {
+        console.log(`\n🔄 Hash query didn't find transaction, using account-based verification...`);
+        console.log(`   This is expected - Hedera mirror node doesn't accept EVM hashes directly\n`);
+        
+        // Verify by checking recent transfers to recipient account
+        const recipient = paymentRequest.recipient || paymentRequest.address || HEDERA_CONFIG.OWNER_EVM_ADDRESS;
+        const recipientAccountId = this.evmAddressToAccountId(recipient);
+        const amountHBAR = parseFloat(paymentRequest.amount);
+        const amountTinybars = Math.floor(amountHBAR * 100000000);
+        
+        try {
+          // Query recent transactions for the recipient account
+          const queryTime = Math.floor(Date.now() / 1000);
+          const queryWindowStart = queryTime - 1800; // 30 minutes window (expanded for reliability)
+          
+          console.log(`   Querying transactions for account: ${recipientAccountId}`);
+          console.log(`   Looking for: ${amountHBAR} HBAR (${amountTinybars} tinybars) in last 30 minutes`);
+          console.log(`   Time window: ${queryWindowStart} - ${queryTime} (current Unix time: ${queryTime})`);
+          console.log(`   Transaction hash being verified: ${txHash}`);
+          
+          // Query by account_id to find recent transactions
+          // Hedera mirror node expects account.id parameter (not account_id)
+          // Format: account.id=0.0.7170260
+          console.log(`   Querying mirror node with account: ${recipientAccountId}`);
+          
+          try {
+            response = await axios.get(
+              `${HEDERA_CONFIG.MIRROR_NODE_URL}/transactions`,
+              {
+                params: {
+                  "account.id": recipientAccountId, // Use account.id parameter
+                  limit: 100,
+                  order: "desc"
+                },
+                timeout: 15000
+              }
+            );
+          } catch (paramError) {
+            // Try alternative parameter format
+            console.log(`   First query format failed, trying alternative...`);
             try {
               response = await axios.get(
-                `${HEDERA_CONFIG.MIRROR_NODE_URL}/transactions`,
+                `${HEDERA_CONFIG.MIRROR_NODE_URL}/accounts/${recipientAccountId}/transactions`,
                 {
                   params: {
-                    transactionhash: txHash
+                    limit: 100,
+                    order: "desc"
                   },
                   timeout: 15000
                 }
               );
-              const transactions = response.data.transactions || [];
-              transaction = transactions[0];
-              
-              if (transaction && transaction.result) {
-                console.log(`✅ Found transaction via query params (with prefix)`);
-              }
-            } catch (err3) {
-              throw new Error(`All query methods failed. Last error: ${err3.message || err3.response?.status}`);
+            } catch (altError) {
+              // Try with account_id as fallback
+              console.log(`   Alternative format also failed, trying account_id...`);
+              response = await axios.get(
+                `${HEDERA_CONFIG.MIRROR_NODE_URL}/transactions`,
+                {
+                  params: {
+                    account_id: recipientAccountId,
+                    limit: 100,
+                    order: "desc"
+                  },
+                  timeout: 15000
+                }
+              );
             }
           }
+          
+          const recentTransactions = response.data.transactions || [];
+          console.log(`   Found ${recentTransactions.length} recent transactions for account ${recipientAccountId}`);
+          
+          // Also try querying by transaction ID if we can extract it from RPC
+          // For now, we'll rely on account-based query which should find it
+          
+          if (recentTransactions.length === 0) {
+            console.log(`   ⚠️  No transactions found at all for this account`);
+            console.log(`   Account ID being queried: ${recipientAccountId}`);
+            console.log(`   EVM Address provided: ${recipient}`);
+            console.log(`   This might mean:`);
+            console.log(`     1. The account hasn't received any transactions recently`);
+            console.log(`     2. Mirror node hasn't indexed the transaction yet (wait 10-30 seconds)`);
+            console.log(`     3. The account ID might be incorrect`);
+            console.log(`   Verify account mapping:`);
+            console.log(`     - Owner EVM: ${HEDERA_CONFIG.OWNER_EVM_ADDRESS} → Account: ${HEDERA_CONFIG.OWNER_ACCOUNT_ID}`);
+            console.log(`     - Client EVM: ${HEDERA_CONFIG.CLIENT_EVM_ADDRESS} → Account: ${HEDERA_CONFIG.CLIENT_ACCOUNT_ID}`);
+          } else {
+            // Log first few transactions for debugging
+            console.log(`   First 3 transactions:`);
+            recentTransactions.slice(0, 3).forEach((tx, i) => {
+              const ts = parseFloat(tx.consensus_timestamp);
+              const tsSec = Math.floor(ts);
+              console.log(`     [${i}] ${tx.transaction_id} - ${tx.consensus_timestamp} (${tsSec}s) - ${tx.result}`);
+            });
+          }
+          
+          // Find transaction where recipient received the expected amount
+          console.log(`   Scanning transactions for matches...`);
+          transaction = recentTransactions.find((tx, idx) => {
+            if (tx.result !== "SUCCESS") {
+              if (idx < 5) console.log(`   [${idx}] Skipping - result: ${tx.result}`);
+              return false;
+            }
+            
+            // Check timestamp - must be recent (within last 10 minutes)
+            // Hedera consensus timestamps are in format: "seconds.nanoseconds"
+            // Example: "1761985569.896590030" = 1761985569 seconds + 896590030 nanoseconds
+            const txTimestamp = parseFloat(tx.consensus_timestamp);
+            const txTimeSeconds = Math.floor(txTimestamp);
+            
+            if (idx < 5) {
+              console.log(`   [${idx}] Checking tx ${tx.transaction_id}`);
+              console.log(`        Timestamp: ${txTimestamp} (${txTimeSeconds} seconds)`);
+              console.log(`        Window: ${queryWindowStart} - ${queryTime} (current: ${queryTime})`);
+              console.log(`        Is within window? ${txTimeSeconds} >= ${queryWindowStart} = ${txTimeSeconds >= queryWindowStart}`);
+            }
+            
+            // Expand window to 30 minutes to be safe (mirror node indexing might have delays)
+            const expandedWindow = queryTime - 1800; // 30 minutes instead of 10
+            if (txTimeSeconds < expandedWindow) {
+              if (idx < 5) console.log(`        ❌ Too old (outside 30-minute window, ${queryTime - txTimeSeconds} seconds ago)`);
+              return false;
+            }
+            
+            // Check transfers - recipient must have received the expected amount
+            const transfers = tx.transfers || [];
+            
+            if (idx < 5 && transfers.length > 0) {
+              console.log(`        Transfers: ${transfers.length}`);
+              transfers.slice(0, 3).forEach((t, tIdx) => {
+                const acc = t.account?.toString() || t.account_id?.toString() || "";
+                const amt = parseInt(t.amount) || 0;
+                console.log(`          [${tIdx}] ${acc}: ${amt} tinybars (${amt / 100000000} HBAR)`);
+              });
+            }
+            
+            const receivedTransfer = transfers.find(t => {
+              const account = t.account?.toString() || t.account_id?.toString() || "";
+              const amount = parseInt(t.amount) || 0;
+              
+              // Debug logging for first few transfers
+              if (idx < 5) {
+                const isRecipient = account === recipientAccountId;
+                const isPositive = amount > 0;
+                const minAmount = Math.floor(amountTinybars * 0.9);
+                const amountMatch = amount >= minAmount;
+                console.log(`        Checking transfer:`);
+                console.log(`          Account: ${account} === ${recipientAccountId}? ${isRecipient}`);
+                console.log(`          Amount: ${amount} tinybars (${amount / 100000000} HBAR)`);
+                console.log(`          Expected: ${amountTinybars} tinybars (${amountHBAR} HBAR)`);
+                console.log(`          Min required (90%): ${minAmount} tinybars`);
+                console.log(`          Amount match: ${amount} >= ${minAmount}? ${amountMatch}`);
+              }
+              
+              // Recipient should have received positive amount matching expected payment
+              // Use 90% tolerance to account for fees
+              const minRequiredAmount = Math.floor(amountTinybars * 0.9);
+              const matches = account === recipientAccountId && 
+                           amount > 0 && 
+                           amount >= minRequiredAmount;
+              
+              if (matches) {
+                console.log(`        ✅ MATCH FOUND!`);
+                console.log(`           Transaction: ${tx.transaction_id}`);
+                console.log(`           Account: ${account} === ${recipientAccountId} ✓`);
+                console.log(`           Amount: ${amount} tinybars (${amount / 100000000} HBAR)`);
+                console.log(`           Expected: ${amountHBAR} HBAR (${amountTinybars} tinybars) ✓`);
+              }
+              
+              return matches;
+            });
+            
+            return !!receivedTransfer;
+          });
+          
+          if (transaction) {
+            console.log(`\n✅ Payment verified via account-based method!`);
+            console.log(`   Transaction ID: ${transaction.transaction_id}`);
+            console.log(`   Consensus: ${transaction.consensus_timestamp}`);
+            console.log(`   Result: ${transaction.result}\n`);
+          } else {
+            console.log(`\n❌ No matching transaction found`);
+            console.log(`   Checked ${recentTransactions.length} transactions`);
+            console.log(`   Window: Last 30 minutes (${queryWindowStart} - ${queryTime})`);
+            console.log(`   Expected: ${recipientAccountId} to receive ${amountTinybars} tinybars (${amountHBAR} HBAR)`);
+            if (recentTransactions.length > 0) {
+              console.log(`   Most recent transaction:`);
+              console.log(`     - ID: ${recentTransactions[0].transaction_id}`);
+              console.log(`     - Timestamp: ${recentTransactions[0].consensus_timestamp}`);
+              console.log(`     - Result: ${recentTransactions[0].result}`);
+              const recentTransfers = recentTransactions[0].transfers || [];
+              if (recentTransfers.length > 0) {
+                console.log(`     - Transfers (first 5):`);
+                recentTransfers.slice(0, 5).forEach((t, i) => {
+                  const acc = t.account?.toString() || t.account_id?.toString() || "";
+                  const amt = parseInt(t.amount) || 0;
+                  const matchesAccount = acc === recipientAccountId;
+                  console.log(`       [${i}] ${acc}: ${amt} tinybars (${amt / 100000000} HBAR)${matchesAccount ? ' ← RECIPIENT' : ''}`);
+                });
+              }
+            } else {
+              console.log(`   ⚠️  No transactions found at all for account ${recipientAccountId}`);
+            }
+          }
+        } catch (accountErr) {
+          console.error(`❌ Account-based verification error: ${accountErr.message}`);
+          if (accountErr.response) {
+            console.error(`   Status: ${accountErr.response.status}`);
+            console.error(`   Data:`, accountErr.response.data);
+          }
         }
-      } catch (err) {
-        const errorMsg = err.response?.data?._status?.messages?.[0]?.message || err.message || "Unknown error";
-        const statusCode = err.response?.status;
-        console.error(`Transaction query failed: ${statusCode || ""} ${errorMsg}`);
-        return { verified: false, error: `Transaction query failed: ${errorMsg} (status: ${statusCode || "N/A"})` };
-      }
-
-      const transactions = response?.data?.transactions || [];
-      if (!transaction && transactions.length > 0) {
-        transaction = transactions[0];
-      }
-      if (!transaction && response?.data) {
-        transaction = response.data;
       }
       
       if (!transaction) {
-        return { verified: false, error: "Transaction not found" };
+        // Provide more helpful error message with suggestion to wait/retry
+        const errorMsg = `Transaction not found in mirror node. This usually means:
+1. Transaction was just created (wait 10-30 seconds and retry)
+2. Mirror node indexing delay (normal for Hedera)
+3. Transaction might be outside 30-minute window
+
+Transaction Hash: ${txHash}
+View on HashScan: https://hashscan.io/testnet/transaction/${txHash}
+
+You can retry the request with the same payment proof after a short wait.`;
+        
+        return { 
+          verified: false, 
+          error: errorMsg,
+          retryable: true,
+          suggestion: "Wait 10-30 seconds and retry with the same transaction hash"
+        };
       }
 
       if (transaction.result !== "SUCCESS") {

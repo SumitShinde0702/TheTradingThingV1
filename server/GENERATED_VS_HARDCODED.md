@@ -17,10 +17,18 @@ This document explains what data in your agent system is **generated** (dynamic/
 - **Location**: `src/services/GroqService.js` → `generateResponse()`
 
 ### Agent Count
-- **Source**: AgentManager internal registry
-- **Generated**: Counts how many agents are actually registered
-- **Changes**: Updates when agents are added/removed
+- **Source**: AgentManager internal registry (in-memory)
+- **Generated**: Counts agents registered on THIS server
+- **Changes**: Updates when agents are added/removed locally
 - **Location**: `src/services/AgentManager.js` → `getAllAgents()`
+- **Note**: Does NOT query ERC-8004 contract - only counts local agents
+
+### Agent Discovery
+- **Source**: AgentManager capability index (in-memory Map)
+- **Hardcoded**: Discovery searches local in-memory index only
+- **Limitation**: Cannot discover agents from other servers
+- **Location**: `src/services/AgentManager.js` → `discoverAgentsByCapability()`
+- **Note**: Agents ARE registered on ERC-8004 (on-chain), but discovery is local only
 
 ### HBAR Balance (999.82274646 HBAR)
 - **Source**: Real Hedera testnet account balance

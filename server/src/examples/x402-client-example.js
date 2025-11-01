@@ -114,7 +114,14 @@ async function executePayment(paymentDetails) {
     ]);
 
     console.log(`✅ Payment confirmed!`);
-    console.log(`   Transaction Hash: ${receipt.hash}\n`);
+    console.log(`   Transaction Hash: ${receipt.hash}`);
+    console.log(`\n⏳ Waiting 15 seconds for mirror node to index transaction...`);
+    console.log(`   (Hedera mirror node needs time to index new transactions)`);
+    
+    // Wait for mirror node to index (Hedera mirror node typically takes 10-30 seconds)
+    await new Promise(resolve => setTimeout(resolve, 15000));
+    
+    console.log(`   Ready for verification!\n`);
 
     return receipt.hash;
   } catch (error) {
