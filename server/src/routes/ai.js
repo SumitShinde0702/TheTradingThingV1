@@ -16,6 +16,10 @@ export function createAIRoutes(agentManager) {
   const groqService = agentManager.getGroqService();
   
   const SERVER_URL = process.env.SERVER_URL || "http://localhost:8443";
+  // Trading API URL (Go server with trading signals)
+  // Default: http://172.23.240.1:8080 (current network IP)
+  // Can be overridden with TRADING_API_URL env var
+  const TRADING_API_URL = process.env.TRADING_API_URL || "http://172.23.240.1:8080";
   
   // Lazy-load payer wallet to avoid connection issues at startup
   let payerWallet = null;
@@ -530,6 +534,118 @@ export function createAIRoutes(agentManager) {
         }
       );
 
+      const getTradingSignalTool = tool(
+        async (input) => {
+          const { traderId } = input;
+          console.log(`[AI-PURCHASE] 🛠️  [get_trading_signal] Starting...`);
+          console.log(`[AI-PURCHASE]    Input: { traderId: "${traderId}" }`);
+          
+          sendEvent("tool", {
+            tool: "get_trading_signal",
+            status: "starting",
+            input: { traderId }
+          });
+
+          try {
+            // Map model names to trader_ids (both use "groq" model, so must use trader_id)
+            let actualTraderId = traderId.toLowerCase().trim();
+            
+            // Handle various input formats - always map to correct trader_id
+            if (actualTraderId.includes("openai") || actualTraderId === "openai") {
+              actualTraderId = "openai_trader";
+            } else if (actualTraderId.includes("qwen") || actualTraderId === "qwen") {
+              actualTraderId = "qwen_trader";
+            } else if (actualTraderId === "openai_trader" || actualTraderId === "qwen_trader") {
+              // Already correct format
+            } else {
+              // Try to fetch available traders to see what's available
+              try {
+                const tradersResponse = await axios.get(`${TRADING_API_URL}/api/traders`, { timeout: 5000 });
+                const traders = tradersResponse.data || [];
+                console.log(`[AI-PURCHASE]    📋 Available traders: ${JSON.stringify(traders.map(t => t.trader_id))}`);
+                // Use the provided traderId as-is if it matches a known trader
+                const matchedTrader = traders.find(t => 
+                  t.trader_id === traderId || 
+                  t.trader_id.toLowerCase() === actualTraderId ||
+                  t.trader_name.toLowerCase().includes(actualTraderId)
+                );
+                if (matchedTrader) {
+                  actualTraderId = matchedTrader.trader_id;
+                } else if (traders.length > 0) {
+                  // Default to first trader if no match
+                  actualTraderId = traders[0].trader_id;
+                  console.log(`[AI-PURCHASE]    ⚠️  No match found, using default: ${actualTraderId}`);
+                }
+              } catch (e) {
+                console.log(`[AI-PURCHASE]    ⚠️  Could not fetch traders list: ${e.message}`);
+              }
+            }
+            
+            const url = `${TRADING_API_URL}/api/trading-signal?trader_id=${actualTraderId}`;
+            console.log(`[AI-PURCHASE]    📡 Fetching trading signal from: ${url}`);
+            
+            const response = await axios.get(url, { timeout: 10000 });
+            const signal = response.data;
+            
+            console.log(`[AI-PURCHASE]    ✅ Trading signal retrieved`);
+            console.log(`[AI-PURCHASE]    Trader: ${signal.trader_name || actualTraderId}`);
+            console.log(`[AI-PURCHASE]    Cycle: ${signal.cycle_number || 'N/A'}`);
+            
+            sendEvent("tool", {
+              tool: "get_trading_signal",
+              status: "completed",
+              result: { traderId: actualTraderId, hasSignal: true }
+            });
+
+            return JSON.stringify({
+              success: true,
+              traderId: actualTraderId,
+              traderName: signal.trader_name,
+              aiModel: signal.ai_model,
+              timestamp: signal.timestamp,
+              cycleNumber: signal.cycle_number,
+              chainOfThought: signal.chain_of_thought || "No chain of thought available",
+              inputPrompt: signal.input_prompt || "No input prompt available",
+              rawResponse: signal.raw_response || "No raw response available",
+              decisions: signal.decisions || [],
+              accountState: signal.account_state || {},
+              errorMessage: signal.error_message || null
+            });
+          } catch (error) {
+            console.error(`[AI-PURCHASE]    ❌ Error: ${error.message}`);
+            sendEvent("tool", {
+              tool: "get_trading_signal",
+              status: "error",
+              error: error.message
+            });
+            return JSON.stringify({
+              success: false,
+              error: error.response?.data?.error || error.message,
+              traderId: traderId
+            });
+          }
+        },
+        {
+          name: "get_trading_signal",
+          description:
+            "Get the latest trading SIGNAL (the trading decision: long/short/wait) from a trading AI model. " +
+            "This returns the actual trading decision so the user can copy what to do at that moment. " +
+            "Returns: decisions (the main output - long/short/wait with symbols, quantities, leverage), " +
+            "plus chain_of_thought (AI reasoning) and input_prompt (context). " +
+            "Use this when the user asks for trading signals, decisions, or what to do from OpenAI or Qwen models. " +
+            "IMPORTANT: Always use trader_id parameter (e.g., 'openai_trader', 'qwen_trader') since both traders use 'groq' as the model name. " +
+            "The traderId can be 'openai_trader', 'qwen_trader', or just 'openai'/'qwen' (will be mapped automatically to trader_id).",
+          schema: z.object({
+            traderId: z
+              .string()
+              .describe(
+                "Trader ID or name. Examples: 'openai_trader', 'qwen_trader', 'openai', 'qwen'. " +
+                "Will be automatically mapped to the correct trader_id. Note: Both traders use 'groq' model, so always use trader_id, not model name."
+              ),
+          }),
+        }
+      );
+
       const respondToUserTool = tool(
         async (input) => {
           const { message } = input;
@@ -844,43 +960,56 @@ export function createAIRoutes(agentManager) {
 on the Hedera blockchain using the A2A (Agent-to-Agent) protocol.
 
 Your workflow:
-1. When a user asks a question or makes a request:
+1. When a user asks about trading signals, decisions, or what to do (long/short/wait) from AI models (like OpenAI or Qwen):
+   - FIRST, use get_trading_signal with the trader_id (e.g., "openai_trader" or "qwen_trader") to get the ACTUAL trading signal
+   - This tool returns the real trading decision (long/short/wait) so the user can copy what to do at that moment
+   - The trading signal includes: decisions (actual trading actions - THIS IS THE MOST IMPORTANT - long/short/wait with symbols and quantities)
+   - Also includes: input_prompt, chain_of_thought (AI reasoning), and raw_response for context
+   - ALWAYS highlight the DECISIONS prominently at the end - show what the AI decided: long, short, or wait, with symbols, quantities, and leverage
+   - The user wants to see the trading decision so they can copy it - make this the main focus
+
+2. When a user asks a question or makes a request that's NOT about trading signals:
    - First, try to use discover_agents to find relevant agents. This will first check for local agents on the server, 
      and fall back to blockchain discovery if needed.
    - If blockchain discovery fails due to rate limits, use the local agents that are returned.
    - The user's query often mentions specific AI models (like OpenAI or Qwen) - look for agents with matching names or capabilities.
    - Analyze the discovered agents to select the most appropriate one based on the user's request.
 
-2. Get detailed information about the selected agent:
+3. Get detailed information about the selected agent (if needed):
    - Use get_agent_card with the agent's ID to understand its capabilities, endpoint, and description
    - This helps you understand if the agent is suitable for the user's request
    - If the agent card fetch fails, you can still try to communicate with the agent using its ID
 
-3. Communicate with the agent:
+4. Communicate with the agent (if needed):
    - Use send_message_to_agent to send the user's message (or a refined version based on the agent's capabilities)
-   - For trading-related queries, ask the agent for their trading prompts, strategies, decision-making process, and recent performance insights
    - Include any necessary context from the conversation
    - The tool handles payment automatically if required
    - For follow-up messages to the same agent, use the same contextId to maintain conversation context
 
-4. Handle agent responses and communicate with the user:
-   - When an agent responds, use respond_to_user to relay the information to the user
-   - If the agent asks for more information, use respond_to_user to ask the user for that information
-   - Don't try to answer the agent's questions yourself - always ask the user using respond_to_user
-   - Present agent responses clearly and naturally using respond_to_user
-   - Always end with respond_to_user to communicate back to the user - never just call send_message_to_agent without following up with respond_to_user
-   - If the agent provides trading prompts, strategies, or insights, format them nicely for the user
+5. Handle responses and communicate with the user:
+   - When you get trading signal data, present it clearly showing:
+     * The input prompt that was sent to the AI
+     * The chain of thought (AI's reasoning process)
+     * The final decisions (long/short/wait actions with symbols, quantities, etc.) - THIS IS THE MOST IMPORTANT PART
+     * Any account state information (equity, PnL, positions)
+   - Use respond_to_user to relay all information to the user
+   - Format trading data nicely - highlight the decisions prominently since that's what the user wants to see
+   - Always end with respond_to_user - never just call a tool without following up
 
 Key points:
+- For trading signal requests: ALWAYS use get_trading_signal FIRST (this gets REAL trading signal from the Go API server at ${TRADING_API_URL})
+- The trading signal contains DECISIONS (long/short/wait actions) - THIS IS WHAT THE USER WANTS TO SEE
+- The user wants to copy the trading decision (long/short/wait) at that moment - show the decisions prominently
+- The decisions array contains: action (long/short/wait), symbol, quantity, leverage, price - format this clearly
+- Also show chain_of_thought and input_prompt for context, but DECISIONS should be the main focus
 - Local agents are preferred and checked first - these are agents registered on the local server
 - If blockchain discovery fails due to rate limits, work with local agents or inform the user
 - Communication happens via A2A (Agent-to-Agent) protocol over JSON-RPC
 - Some agents require payment (handled automatically by send_message_to_agent)
 - Use contextId to maintain conversation state across multiple messages
 - Always use respond_to_user to communicate with the user - this is how you provide answers and ask questions
-- If an agent asks for more information, use respond_to_user to ask the user for that information
-- After every send_message_to_agent call, use respond_to_user to relay the agent's response to the user
-- If an agent doesn't respond appropriately, you can try discovering different agents or inform the user about the issue`;
+- After every tool call, use respond_to_user to relay the results to the user
+- Present trading decisions clearly - the user wants to see what the AI decided (long/short/wait) at the end of your response`;
 
       console.log("[AI-PURCHASE] ✅ Groq model initialized");
       sendEvent("status", { 
@@ -896,6 +1025,7 @@ Key points:
         tools: [
           discoverAgentsTool,
           getAgentCardTool,
+          getTradingSignalTool, // NEW: Tool to get actual trading signals from Go API
           respondToUserTool,
           sendMessageToAgentTool,
         ],
@@ -909,10 +1039,34 @@ Key points:
         message: "Agent is processing your request..." 
       });
 
-      // Invoke agent
-      const response = await agent.invoke({
-        messages: [{ role: "user", content: query }],
-      });
+      // Invoke agent with retry logic (Groq API can have connection issues)
+      // Reduced retries and faster delays for better UX
+      let response;
+      const maxRetries = 2; // Reduced from 3 to 2
+      let lastError;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          console.log(`[AI-PURCHASE] 📡 Invoking agent (attempt ${attempt}/${maxRetries})...`);
+          response = await agent.invoke({
+            messages: [{ role: "user", content: query }],
+          });
+          break; // Success
+        } catch (error) {
+          lastError = error;
+          if (attempt === maxRetries) {
+            throw error;
+          }
+          const delay = 1000; // Faster retry: 1s instead of 2s, 4s
+          console.log(`[AI-PURCHASE] ⚠️  Attempt ${attempt} failed: ${error.message}`);
+          console.log(`[AI-PURCHASE] ⏳ Retrying in ${delay/1000} seconds...`);
+          sendEvent("status", {
+            type: "retrying",
+            message: `Connection issue, retrying... (attempt ${attempt}/${maxRetries})`
+          });
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
 
       console.log("[AI-PURCHASE] ✅ Agent completed processing");
 

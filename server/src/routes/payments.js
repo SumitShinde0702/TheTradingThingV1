@@ -9,43 +9,65 @@ export function createPaymentRoutes(agentManager) {
   const router = express.Router();
   const x402Service = agentManager.getX402Service();
   
-  // Lazy-load client wallet only when needed to avoid connection issues at startup
-  let clientWallet = null;
-  let currentProvider = null;
+  // Multiple RPC endpoints for fallback
+  const RPC_ENDPOINTS = [
+    HEDERA_CONFIG.JSON_RPC_URL,
+    "https://testnet.hashio.io/api",
+    "https://testnet.hedera.com",
+    "https://testnet.hashio.io/api/v1/accounts",
+  ].filter((url, index, self) => self.indexOf(url) === index);
+  
+  // Aggressively suppress ethers.js provider warnings by intercepting stderr
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+  let stderrSuppressed = false;
+  
+  const suppressEthersWarnings = () => {
+    if (stderrSuppressed) return;
+    process.stderr.write = (chunk, encoding, fd) => {
+      const message = chunk?.toString() || '';
+      if (message.includes('JsonRpcProvider failed to detect network') || 
+          message.includes('cannot start up; retry in')) {
+        return true; // Suppress - don't write to stderr
+      }
+      return originalStderrWrite(chunk, encoding, fd);
+    };
+    stderrSuppressed = true;
+  };
+  
+  const restoreConsoleError = () => {
+    if (stderrSuppressed) {
+      process.stderr.write = originalStderrWrite;
+      stderrSuppressed = false;
+    }
+  };
+  
+  // Create fresh wallet with specific RPC endpoint
+  const createWallet = (rpcUrl = null) => {
+    const network = {
+      name: "hedera-testnet",
+      chainId: HEDERA_CONFIG.CHAIN_ID
+    };
+    
+    const url = rpcUrl || RPC_ENDPOINTS[0];
+    
+    // Suppress ethers warnings temporarily
+    suppressEthersWarnings();
+    
+    try {
+      // Create provider with staticNetwork to skip auto-detection (prevents spam)
+      const provider = new ethers.JsonRpcProvider(url, network, {
+        staticNetwork: true
+      });
+      
+      return new ethers.Wallet(HEDERA_CONFIG.CLIENT_PRIVATE_KEY, provider);
+    } finally {
+      restoreConsoleError();
+    }
+  };
   
   const getClientWallet = async () => {
-    if (!clientWallet) {
-      // Use explicit network config (same as x402-client-example.js) to avoid connection issues
-      const network = {
-        name: "hedera-testnet",
-        chainId: HEDERA_CONFIG.CHAIN_ID
-      };
-      
-      // Try primary RPC first
-      let provider = new ethers.JsonRpcProvider(HEDERA_CONFIG.JSON_RPC_URL, network);
-      
-      // Test connection (but don't fail if it doesn't connect - just use the provider)
-      try {
-        await Promise.race([
-          provider.getNetwork(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("RPC connection timeout")), 3000)
-          )
-        ]);
-        currentProvider = provider;
-      } catch (error) {
-        console.warn(`⚠️  Primary RPC connection test failed: ${error.message}`);
-        console.warn(`   Will still attempt transactions (may succeed on retry)`);
-        // Continue anyway - the provider is created, just connection test failed
-        currentProvider = provider;
-      }
-      
-      clientWallet = new ethers.Wallet(
-        HEDERA_CONFIG.CLIENT_PRIVATE_KEY,
-        currentProvider
-      );
-    }
-    return clientWallet;
+    // Always create fresh wallet to avoid stale provider connections
+    return createWallet();
   };
 
   /**
@@ -218,13 +240,15 @@ export function createPaymentRoutes(agentManager) {
    * Charges 1 HBAR from client wallet to payment agent
    */
   router.post("/model-payment", async (req, res) => {
+    // Extract modelName early so it's always available in error handlers
+    const modelName = req.body?.modelName || "Unknown"; // e.g., "OpenAI" or "Qwen"
+    
     try {
-      const { modelName } = req.body; // e.g., "OpenAI" or "Qwen"
-      
-      if (!modelName) {
+      if (!req.body?.modelName) {
         return res.status(400).json({
           success: false,
-          error: "modelName is required"
+          error: "modelName is required",
+          modelName: "Unknown"
         });
       }
 
@@ -249,82 +273,128 @@ export function createPaymentRoutes(agentManager) {
       
       console.log(`   Sending ${amount} HBAR to ${recipientAddress}...`);
       
-      // Get client wallet (lazy-loaded, will try fallbacks)
-      let wallet;
-      try {
-        wallet = await getClientWallet();
-      } catch (rpcError) {
-        console.error("   ❌ All RPC endpoints failed:", rpcError.message);
+      // Check if test mode first
+      if (HEDERA_CONFIG.TEST_MODE) {
+        console.warn("   🧪 TEST MODE: Simulating payment (RPC unavailable)");
+        const mockTxHash = `0x${Date.now().toString(16)}${Math.random().toString(16).substring(2, 18)}`;
         
-        // If test mode enabled, simulate payment
-        if (HEDERA_CONFIG.TEST_MODE) {
-          console.warn("   🧪 TEST MODE: Simulating payment (RPC unavailable)");
-          const mockTxHash = `0x${Date.now().toString(16)}${Math.random().toString(16).substring(2, 18)}`;
-          
-          return res.json({
-            success: true,
-            modelName,
-            payment: {
-              amount: "1",
-              token: "HBAR",
-              txHash: mockTxHash,
-              hashscanUrl: `https://hashscan.io/testnet/transaction/${mockTxHash}`,
-              recipient: paymentAgent.name,
-              recipientId: paymentAgent.id,
-              status: "completed",
-              testMode: true,
-              warning: "TEST MODE: This is a simulated payment. Real blockchain transaction was not executed."
-            },
-            timestamp: Date.now()
-          });
-        }
-        
-        console.error("   💡 Tip: Set TEST_MODE=true in environment to enable mock payments");
-        return res.status(503).json({
-          success: false,
-          error: `Hedera RPC connection failed: ${rpcError.message}. The Hedera testnet RPC endpoints may be down or unreachable. Please try again later or enable TEST_MODE for development.`,
-          modelName: modelName,
+        return res.json({
+          success: true,
+          modelName,
+          payment: {
+            amount: "1",
+            token: "HBAR",
+            txHash: mockTxHash,
+            hashscanUrl: `https://hashscan.io/testnet/transaction/${mockTxHash}`,
+            recipient: paymentAgent.name,
+            recipientId: paymentAgent.id,
+            status: "completed",
+            testMode: true,
+            warning: "TEST MODE: This is a simulated payment. Real blockchain transaction was not executed."
+          },
           timestamp: Date.now()
         });
       }
       
-      // Send transaction with retry logic (same as x402-client-example.js)
+      // Send transaction with retry logic and RPC endpoint fallback
+      // More aggressive retries for HashIO (5 tries with exponential backoff)
       let tx, receipt, txHash;
-      const maxRetries = 5;
       let lastError;
+      let successfulEndpoint = null;
       
       try {
-        // Retry sending transaction
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-          try {
-            console.log(`   📤 Attempting transaction (attempt ${attempt}/${maxRetries})...`);
-            tx = await wallet.sendTransaction({
-              to: recipientAddress,
-              value: ethers.parseEther(amount),
-            });
-            break; // Success
-          } catch (error) {
-            lastError = error;
-            if (attempt === maxRetries) {
-              throw error;
+        // Try each RPC endpoint until one works
+        for (let endpointIndex = 0; endpointIndex < RPC_ENDPOINTS.length; endpointIndex++) {
+          const rpcUrl = RPC_ENDPOINTS[endpointIndex];
+          const endpointName = rpcUrl.includes('hashio') ? 'HashIO' : 
+                               rpcUrl.includes('hedera.com') ? 'Hedera Official' : 'Primary';
+          
+          // HashIO gets more retries (5), others get 3
+          const maxRetriesPerEndpoint = endpointName === 'HashIO' ? 5 : 3;
+          
+          console.log(`   🔄 Trying ${endpointName} RPC endpoint (${maxRetriesPerEndpoint} attempts)...`);
+          
+          // Retry sending transaction with this endpoint
+          for (let attempt = 1; attempt <= maxRetriesPerEndpoint; attempt++) {
+            try {
+              console.log(`   📤 Attempt ${attempt}/${maxRetriesPerEndpoint} on ${endpointName}...`);
+              
+              // Suppress ethers warnings during transaction
+              suppressEthersWarnings();
+              
+              try {
+                // Create fresh wallet for THIS endpoint
+                const freshWallet = createWallet(rpcUrl);
+                
+                // Add timeout to prevent hanging
+                tx = await Promise.race([
+                  freshWallet.sendTransaction({
+                    to: recipientAddress,
+                    value: ethers.parseEther(amount),
+                  }),
+                  new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error("Transaction send timeout (10s)")), 10000)
+                  )
+                ]);
+              } finally {
+                restoreConsoleError();
+              }
+              
+              successfulEndpoint = endpointName;
+              break; // Success - exit both loops
+            } catch (error) {
+              lastError = error;
+              const isConnectionError = error.message?.includes('ECONNRESET') || 
+                                       error.message?.includes('timeout') ||
+                                       error.code === 'ECONNRESET' ||
+                                       error.code === 'ETIMEDOUT';
+              
+              if (attempt < maxRetriesPerEndpoint && isConnectionError) {
+                // Exponential backoff: 2s, 4s, 8s, 16s (for HashIO with 5 tries)
+                // For 3 tries: 2s, 4s, 8s
+                const delay = Math.min(2000 * Math.pow(2, attempt - 1), 16000);
+                console.log(`   ⚠️  Attempt ${attempt} failed: ${error.message.substring(0, 50)}...`);
+                console.log(`   ⏳ Retrying in ${delay/1000} seconds...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+              } else {
+                console.log(`   ❌ ${endpointName} failed after ${attempt} attempts: ${error.message.substring(0, 50)}...`);
+                break; // Try next endpoint
+              }
             }
-            // Exponential backoff: 2s, 4s, 8s, 16s
-            const delay = Math.min(2000 * Math.pow(2, attempt - 1), 16000);
-            console.log(`   ⚠️  Attempt ${attempt} failed: ${error.message}`);
-            console.log(`   ⏳ Retrying in ${delay/1000} seconds...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
           }
+          
+          // If we got a transaction, break out of endpoint loop
+          if (tx) break;
+          
+          // If this was the last endpoint, throw error
+          if (endpointIndex === RPC_ENDPOINTS.length - 1) {
+            throw lastError || new Error("All RPC endpoints failed");
+          }
+          
+          // Small delay before switching endpoints
+          console.log(`   ⚠️  ${endpointName} unavailable, trying next endpoint...`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        if (!tx) {
+          throw lastError || new Error("Failed to send transaction after all retries");
         }
 
-        console.log(`   📤 Transaction sent: ${tx.hash}`);
+        console.log(`   📤 Transaction sent via ${successfulEndpoint}: ${tx.hash}`);
         console.log(`   ⏳ Waiting for confirmation...`);
 
-        receipt = await Promise.race([
-          tx.wait(),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Transaction timeout")), 30000)
-          ),
-        ]);
+        // Suppress warnings during confirmation
+        suppressEthersWarnings();
+        try {
+          receipt = await Promise.race([
+            tx.wait(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Transaction timeout")), 30000)
+            ),
+          ]);
+        } finally {
+          restoreConsoleError();
+        }
 
         txHash = receipt.hash;
         console.log(`✅ Payment completed: ${txHash}`);
@@ -367,7 +437,7 @@ export function createPaymentRoutes(agentManager) {
       res.status(500).json({
         success: false,
         error: errorMessage,
-        modelName: modelName || "Unknown",
+        modelName: modelName, // Now always defined
         timestamp: Date.now()
       });
     }
