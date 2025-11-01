@@ -257,6 +257,27 @@ export class AgentManager {
   }
 
   /**
+   * Get A2A client for sending messages to other agents
+   * Returns null if agent not found
+   */
+  getA2AClient(agentId) {
+    const agent = this.getAgent(agentId);
+    if (!agent) {
+      return null;
+    }
+    // Return the agent's A2A endpoint URL
+    // The actual client will be created by A2AService
+    return {
+      agentId: agent.id,
+      agentName: agent.name,
+      endpoint: agent.endpoint,
+      a2aEndpoint: agent.endpoint
+        .replace("/api/agents/", "/api/agents/")
+        .replace(/\/[^\/]+$/, `/${agent.id}/a2a`),
+    };
+  }
+
+  /**
    * Process message with AI
    * @param {string} agentId - Agent ID
    * @param {string} message - Message content
