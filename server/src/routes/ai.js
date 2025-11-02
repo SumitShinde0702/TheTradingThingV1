@@ -598,6 +598,9 @@ export function createAIRoutes(agentManager) {
           description:
             "Process payment for model access. This calls the server's payment endpoint to create a Hedera transaction. " +
             "Payment is handled server-side (not by PaymentProcessor agent). " +
+            "Returns a JSON string with fields: {success: true, modelName: string, txHash: string, hashscanUrl: string}. " +
+            "You MUST parse this JSON and extract the txHash value (it starts with '0x'). " +
+            "Use this actual txHash value in your messages - do NOT use placeholder text. " +
             "After payment succeeds, you should notify PaymentProcessor agent for acknowledgment. " +
             "This tool should be called for each model (OpenAI, Qwen) that needs payment.",
           schema: z.object({
@@ -885,14 +888,31 @@ export function createAIRoutes(agentManager) {
                   fullResponse: response
                 });
 
-                return JSON.stringify({
+                // Return structured JSON with extracted response text for easier parsing by agent
+                const retryResponseData = {
                   success: true,
                   agentId: agentId,
                   agentName: agentName,
                   contextId: contextId,
                   paymentTxHash: txHash,
-                  response: response,
-                });
+                  responseText: responseText,
+                  fullResponse: response,
+                };
+                
+                // For DataAnalyzer responses, include the full signal data prominently
+                if (phase === "signal" && responseText) {
+                  const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
+                  if (jsonMatch) {
+                    try {
+                      const signalData = JSON.parse(jsonMatch[1]);
+                      retryResponseData.signalData = signalData;
+                    } catch (e) {
+                      retryResponseData.signalDataRaw = jsonMatch[1];
+                    }
+                  }
+                }
+                
+                return JSON.stringify(retryResponseData);
               } else {
                 throw new Error("Payment required but no payment details provided");
               }
@@ -930,14 +950,33 @@ export function createAIRoutes(agentManager) {
               fullResponse: response
             });
 
-            return JSON.stringify({
+            // Return structured JSON with extracted response text for easier parsing by agent
+            const responseData = {
               success: true,
               agentId: agentId,
               agentName: agentName,
               contextId: contextId,
               paymentTxHash: paymentTxHash,
-              response: response,
-            });
+              responseText: responseText, // Extracted text for easy reading
+              fullResponse: response, // Full JSON-RPC response for data extraction
+            };
+            
+            // For DataAnalyzer responses, include the full signal data prominently
+            if (phase === "signal" && responseText) {
+              // Try to extract JSON signal data from responseText
+              const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
+              if (jsonMatch) {
+                try {
+                  const signalData = JSON.parse(jsonMatch[1]);
+                  responseData.signalData = signalData; // Include parsed signal for easy access
+                } catch (e) {
+                  // If parsing fails, include raw JSON text
+                  responseData.signalDataRaw = jsonMatch[1];
+                }
+              }
+            }
+            
+            return JSON.stringify(responseData);
           } catch (error) {
             console.error(`[AI-PURCHASE]    ❌ Error: ${error.message}`);
             if (error.response) {
@@ -958,6 +997,10 @@ export function createAIRoutes(agentManager) {
           name: "send_message_to_agent",
           description:
             "Send a message to an agent via the A2A (Agent-to-Agent) protocol. " +
+            "Returns a JSON string with fields: {success: true, agentId: string, agentName: string, responseText: string, fullResponse: object}. " +
+            "For DataAnalyzer responses, the JSON also includes signalData field containing the parsed trading signal JSON. " +
+            "You MUST parse this JSON response to extract the actual responseText or signalData values. " +
+            "DO NOT use placeholder text in your messages - extract and use the actual values from the tool response. " +
             "This tool handles payment automatically if required. " +
             "For follow-up messages to the same agent, use the same contextId to maintain conversation context.",
           schema: z.object({
@@ -989,6 +1032,16 @@ export function createAIRoutes(agentManager) {
       // System prompt - Orchestrator Agent Workflow
       const systemPrompt = `You are an Orchestrator Agent that coordinates a complete trading workflow using A2A (Agent-to-Agent) protocol.
 
+**WORKFLOW EXECUTION MODEL:**
+- You are executing a SEQUENTIAL workflow - one step at a time, in order
+- Call ONE tool, get its result, process the result, then call the NEXT tool
+- NEVER call multiple tools at the same time - always wait for tool result before proceeding
+- Tool results are JSON strings - parse them to extract actual values (txHash, signal data)
+- After parsing a tool result, use the extracted values in your next message (not placeholders)
+- Phase order: Discovery → Payment → Signal → Execution → Completion
+- Complete each phase 100% before starting the next phase
+- If you see placeholder text like "[ACTUAL_TXHASH_FROM_TOOL]" in your messages, you made an error - you must extract real values from tool responses
+
 When a user requests to purchase trading signals and execute trades, you MUST follow this exact workflow:
 
 **PHASE 1: DISCOVERY**
@@ -1000,46 +1053,68 @@ When a user requests to purchase trading signals and execute trades, you MUST fo
 
 **PHASE 2: PAYMENT**
 1. Extract the model name(s) from the user's request (OpenAI, Qwen, or both)
-2. For each model, process payment:
-   - FIRST, call process_payment tool with modelName to create server-side Hedera transaction
-   - Wait for payment confirmation (txHash)
-   - THEN, send A2A message to PaymentProcessor: "Payment processed for [modelName]. Transaction: [txHash]. Please acknowledge."
-   - Wait for PaymentProcessor's acknowledgment response
-   - Use respond_to_user to show: "✅ Payment processed for [modelName]. Transaction: [txHash]"
-3. If payment fails for any model, stop and inform the user via respond_to_user.
+2. For EACH model, complete this ENTIRE sequence before moving to the next model:
+   a. Call process_payment tool with modelName
+   b. WAIT for the tool result - it returns JSON with success, txHash fields
+   c. Parse the JSON response and extract the txHash value (it's a real hash starting with "0x")
+   d. Store this txHash - you MUST use the actual value, NOT placeholder text
+   e. Send A2A message to PaymentProcessor: "Payment processed for [modelName]. Transaction: [USE_THE_ACTUAL_TXHASH_YOU_EXTRACTED]. Please acknowledge."
+   f. WAIT for PaymentProcessor's response before continuing
+   g. Use respond_to_user ONCE: "✅ Payment processed for [modelName]. Transaction: [USE_THE_ACTUAL_TXHASH]"
+3. CRITICAL: Only proceed to Phase 3 AFTER all payments are complete and acknowledged
+4. If payment fails, stop immediately and inform the user via respond_to_user.
 
 **PHASE 3: SIGNAL RETRIEVAL**
-1. After all payments are confirmed, request trading signals:
-   - For each model, send A2A message to DataAnalyzer: "Get the latest trading signal from [modelName] AI trading model. I need the complete signal including: decisions (long/short/wait actions with symbols and quantities), chain_of_thought, input_prompt, and account_state."
-   - Wait for DataAnalyzer's response containing the trading signal
-   - Parse and store the signal data, especially the decisions array
-2. Use respond_to_user to show the retrieved signals: "📊 Trading signal retrieved for [modelName]: [decision summary]"
+1. ONLY start this phase AFTER Phase 2 is completely finished (all payments confirmed)
+2. For EACH model, complete this ENTIRE sequence:
+   a. Send A2A message to DataAnalyzer: "Get the latest trading signal from [modelName] AI trading model. I need the complete signal including: decisions (long/short/wait actions with symbols and quantities), chain_of_thought, input_prompt, and account_state."
+   b. WAIT for DataAnalyzer's complete response
+   c. Parse the response - the send_message_to_agent tool returns JSON with responseText and possibly signalData
+   d. Extract the FULL JSON signal data - look for signalData field in the tool response, or parse the JSON block from responseText
+   e. Store this complete JSON data as a variable - you MUST send this exact JSON string to TradeExecutor later (not placeholder text)
+   f. Format a summary of decisions (e.g., "HYPEUSDT close_long, ALL wait")
+   g. Use respond_to_user ONCE: "📊 Trading signal retrieved for [modelName]: [YOUR_FORMATTED_SUMMARY]"
+3. CRITICAL: Only proceed to Phase 4 AFTER all signals are retrieved and stored
 
 **PHASE 4: TRADE EXECUTION**
-1. After all signals are retrieved, execute trades:
-   - Send A2A message to TradeExecutor: "Execute trades based on the following trading signals: [paste complete signal data from all models]"
-   - Include all trading signal data (decisions, chain_of_thought, input_prompt, account_state)
-   - Wait for TradeExecutor's confirmation
-2. Use respond_to_user to show: "🚀 Trade execution initiated. TradeExecutor received and processed the signals."
+1. ONLY start this phase AFTER Phase 3 is completely finished (all signals retrieved)
+2. You should have stored the complete JSON signal data from DataAnalyzer responses (from signalData field or parsed from responseText)
+3. Send A2A message to TradeExecutor: "Execute trades based on the following trading signals: [PASTE_THE_ACTUAL_JSON_STRING_YOU_STORED]"
+4. IMPORTANT: The message should contain the actual JSON data as a string, not placeholder text like "[PASTE_THE_COMPLETE_JSON_DATA_YOU_STORED]"
+5. Example format: "Execute trades based on the following trading signals: {\"trader_id\":\"qwen_trader\",\"decisions\":[...],...}"
+6. WAIT for TradeExecutor's response before continuing
+7. Use respond_to_user ONCE: "🚀 Trade execution initiated. TradeExecutor received and processed the signals."
 
 **PHASE 5: COMPLETION**
-1. Use respond_to_user with final summary:
+1. Use respond_to_user ONCE with final summary:
    "✅ Complete! All trades executed successfully based on [modelNames] trading signals.
    📊 Signals retrieved and processed.
    🚀 TradeExecutor has received and executed the trades according to the AI trading model decisions."
+2. CRITICAL: After sending the completion message, STOP. Do NOT call any more tools. The workflow is complete.
 
-**CRITICAL RULES:**
-- ALL communication MUST go through A2A protocol using send_message_to_agent - NO direct API calls
-- Use respond_to_user after EACH phase to show progress to the user
+**CRITICAL EXECUTION RULES:**
+- EXECUTE PHASES SEQUENTIALLY - complete Phase 1 FULLY, THEN Phase 2 FULLY, THEN Phase 3 FULLY, THEN Phase 4 FULLY, THEN Phase 5 ONCE
+- NEVER start a phase before the previous phase is completely finished
+- NEVER call tools from multiple phases at the same time
+- ALWAYS WAIT for tool responses before proceeding - tools return JSON strings that you must parse
+- When a tool returns a result, parse the JSON string to extract actual values (txHash, signal data, etc.)
+- Use the ACTUAL extracted values in your messages - never use placeholder text like "[ACTUAL_TXHASH_FROM_TOOL]"
 - Maintain separate contextId for each agent conversation
-- If any phase fails, stop immediately and use respond_to_user to inform the user with clear error message
-- Always show agent-to-agent conversations transparently via respond_to_user
-- Format agent responses clearly: "💬 Orchestrator → [Agent]: [message]" and "📨 [Agent]: [response]"
+- If any phase fails, stop immediately and inform the user
+- Use respond_to_user ONCE per phase completion (not multiple times)
+- After Phase 5 completion message, STOP - do not call any more tools
 
-**Agent Communication Format:**
-- When sending to agent: "💬 Orchestrator → [AgentName]: [message]"
-- When receiving response: "📨 [AgentName]: [response]"
-- Show workflow phase clearly: "💳 Payment Phase", "📊 Signal Phase", "🚀 Execution Phase"`;
+**CRITICAL DATA EXTRACTION RULES:**
+- When process_payment returns a result, EXTRACT the actual txHash value (not abc123)
+- When DataAnalyzer responds, EXTRACT the actual JSON signal data from the response (look for JSON blocks or parse the response)
+- When sending to TradeExecutor, INCLUDE the actual extracted JSON signal data (not placeholder text)
+- Always use REAL data from tool responses, never use placeholder or example text
+- The format [something] in instructions means replace this with actual data, not include this literal text
+
+**Message Format for respond_to_user:**
+- Do NOT add "💬 Orchestrator →" or "📨" prefixes in respond_to_user messages
+- Use REAL data: "✅ Payment processed for OpenAI. Transaction: [ACTUAL_TXHASH_FROM_TOOL]"
+- The system will automatically format agent conversations from send_message_to_agent calls`;
 
       console.log("[AI-PURCHASE] ✅ Groq model initialized");
       sendEvent("status", { 
@@ -1060,6 +1135,9 @@ When a user requests to purchase trading signals and execute trades, you MUST fo
           respondToUserTool,
           sendMessageToAgentTool,
         ],
+        // Prevent infinite loops and ensure sequential execution
+        recursionLimit: 50, // Increase from default 25 to allow full workflow
+        maxIterations: 50, // Maximum tool calls before stopping
       });
 
       console.log("[AI-PURCHASE] ✅ Agent created");
