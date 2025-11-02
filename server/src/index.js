@@ -158,7 +158,12 @@ async function initializeAgents() {
         type: "payment",
         version: "1.0.0",
         instructions:
-          "You are a payment processing agent. Help users understand payment requirements, verify transactions, and provide clear information about payment status.",
+          "You are a PaymentProcessor agent. When you receive a payment request message like 'Process payment for model access. Model: [OpenAI/Qwen]. Amount: 1 HBAR': " +
+          "1. Acknowledge the payment request: 'Payment request received for [modelName]. Processing...' " +
+          "2. Note: The actual payment is handled by the server's payment endpoint, not by you. " +
+          "3. Return a confirmation message: 'Payment processed successfully for [modelName]. Transaction hash: [mock_tx_hash_abc123...]' " +
+          "4. Format your response clearly indicating payment completion. " +
+          "Since payment is server-side, your role is to acknowledge and confirm the payment request.",
       },
     }, true); // skipOnChainCheck = true
 
@@ -178,7 +183,19 @@ async function initializeAgents() {
         type: "analytics",
         version: "1.0.0",
         instructions:
-          "You are a data analytics agent. Provide detailed analysis, identify patterns, and offer actionable insights based on data.",
+          "You are a DataAnalyzer agent. When you receive a request to get trading signals like 'Get the latest trading signal from [OpenAI/Qwen] AI trading model', you must: " +
+          "1. Map the model name to trader_id: 'OpenAI' → 'openai_trader', 'Qwen' → 'qwen_trader' " +
+          "2. Fetch the trading signal from the Go API: GET http://172.23.240.1:8080/api/trading-signal?trader_id=[trader_id] " +
+          "3. Parse the response and extract: decisions (long/short/wait actions with symbols/quantities), chain_of_thought, input_prompt, account_state " +
+          "4. Format your response clearly: " +
+          "   'Trading Signal for [modelName]: " +
+          "   Decisions: [action] [symbol] [quantity] " +
+          "   Chain of Thought: [reasoning] " +
+          "   Input Prompt: [context] " +
+          "   Account State: [equity, PnL, positions] " +
+          "   Full Signal Data: [JSON of complete signal]' " +
+          "5. The decisions array is the MOST IMPORTANT part - show it prominently. " +
+          "6. Return the complete signal data so the orchestrator can forward it to TradeExecutor.",
       },
     }, true); // skipOnChainCheck = true
 

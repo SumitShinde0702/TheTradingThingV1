@@ -536,114 +536,74 @@ export function createAIRoutes(agentManager) {
         }
       );
 
-      const getTradingSignalTool = tool(
+      // REMOVED: get_trading_signal tool - now handled by DataAnalyzer agent via A2A
+
+      // Payment processing tool (server-side, not agent-based)
+      const processPaymentTool = tool(
         async (input) => {
-          const { traderId } = input;
-          console.log(`[AI-PURCHASE] 🛠️  [get_trading_signal] Starting...`);
-          console.log(`[AI-PURCHASE]    Input: { traderId: "${traderId}" }`);
+          const { modelName } = input;
+          console.log(`[AI-PURCHASE] 🛠️  [process_payment] Starting...`);
+          console.log(`[AI-PURCHASE]    Model: ${modelName}`);
           
           sendEvent("tool", {
-            tool: "get_trading_signal",
+            tool: "process_payment",
             status: "starting",
-            input: { traderId }
+            input: { modelName }
           });
-
+          
           try {
-            // Map model names to trader_ids (both use "groq" model, so must use trader_id)
-            let actualTraderId = traderId.toLowerCase().trim();
+            // Call payment endpoint directly (server-side payment, not agent-based)
+            const paymentUrl = `${SERVER_URL}/api/payments/model-payment`;
+            console.log(`[AI-PURCHASE]    📡 Calling payment endpoint: ${paymentUrl}`);
             
-            // Handle various input formats - always map to correct trader_id
-            if (actualTraderId.includes("openai") || actualTraderId === "openai") {
-              actualTraderId = "openai_trader";
-            } else if (actualTraderId.includes("qwen") || actualTraderId === "qwen") {
-              actualTraderId = "qwen_trader";
-            } else if (actualTraderId === "openai_trader" || actualTraderId === "qwen_trader") {
-              // Already correct format
+            const response = await axios.post(paymentUrl, { modelName }, {
+              headers: { 'Content-Type': 'application/json' }
+            });
+            
+            if (response.data.success && response.data.payment) {
+              const { txHash, hashscanUrl } = response.data.payment;
+              console.log(`[AI-PURCHASE]    ✅ Payment processed! TxHash: ${txHash}`);
+              
+              sendEvent("tool", {
+                tool: "process_payment",
+                status: "completed",
+                result: { txHash, hashscanUrl, modelName }
+              });
+              
+              return JSON.stringify({
+                success: true,
+                modelName,
+                txHash,
+                hashscanUrl,
+                message: `Payment processed successfully for ${modelName}. Transaction: ${txHash.substring(0, 16)}...`
+              });
             } else {
-              // Try to fetch available traders to see what's available
-              try {
-                const tradersResponse = await axios.get(`${TRADING_API_URL}/api/traders`, { timeout: 5000 });
-                const traders = tradersResponse.data || [];
-                console.log(`[AI-PURCHASE]    📋 Available traders: ${JSON.stringify(traders.map(t => t.trader_id))}`);
-                // Use the provided traderId as-is if it matches a known trader
-                const matchedTrader = traders.find(t => 
-                  t.trader_id === traderId || 
-                  t.trader_id.toLowerCase() === actualTraderId ||
-                  t.trader_name.toLowerCase().includes(actualTraderId)
-                );
-                if (matchedTrader) {
-                  actualTraderId = matchedTrader.trader_id;
-                } else if (traders.length > 0) {
-                  // Default to first trader if no match
-                  actualTraderId = traders[0].trader_id;
-                  console.log(`[AI-PURCHASE]    ⚠️  No match found, using default: ${actualTraderId}`);
-                }
-              } catch (e) {
-                console.log(`[AI-PURCHASE]    ⚠️  Could not fetch traders list: ${e.message}`);
-              }
+              throw new Error(response.data.error || "Payment failed");
             }
-            
-            const url = `${TRADING_API_URL}/api/trading-signal?trader_id=${actualTraderId}`;
-            console.log(`[AI-PURCHASE]    📡 Fetching trading signal from: ${url}`);
-            
-            const response = await axios.get(url, { timeout: 10000 });
-            const signal = response.data;
-            
-            console.log(`[AI-PURCHASE]    ✅ Trading signal retrieved`);
-            console.log(`[AI-PURCHASE]    Trader: ${signal.trader_name || actualTraderId}`);
-            console.log(`[AI-PURCHASE]    Cycle: ${signal.cycle_number || 'N/A'}`);
-            
-            sendEvent("tool", {
-              tool: "get_trading_signal",
-              status: "completed",
-              result: { traderId: actualTraderId, hasSignal: true }
-            });
-
-            return JSON.stringify({
-              success: true,
-              traderId: actualTraderId,
-              traderName: signal.trader_name,
-              aiModel: signal.ai_model,
-              timestamp: signal.timestamp,
-              cycleNumber: signal.cycle_number,
-              chainOfThought: signal.chain_of_thought || "No chain of thought available",
-              inputPrompt: signal.input_prompt || "No input prompt available",
-              rawResponse: signal.raw_response || "No raw response available",
-              decisions: signal.decisions || [],
-              accountState: signal.account_state || {},
-              errorMessage: signal.error_message || null
-            });
           } catch (error) {
             console.error(`[AI-PURCHASE]    ❌ Error: ${error.message}`);
             sendEvent("tool", {
-              tool: "get_trading_signal",
+              tool: "process_payment",
               status: "error",
               error: error.message
             });
             return JSON.stringify({
               success: false,
-              error: error.response?.data?.error || error.message,
-              traderId: traderId
+              error: error.response?.data?.error || error.message
             });
           }
         },
         {
-          name: "get_trading_signal",
+          name: "process_payment",
           description:
-            "Get the latest trading SIGNAL (the trading decision: long/short/wait) from a trading AI model. " +
-            "This returns the actual trading decision so the user can copy what to do at that moment. " +
-            "Returns: decisions (the main output - long/short/wait with symbols, quantities, leverage), " +
-            "plus chain_of_thought (AI reasoning) and input_prompt (context). " +
-            "Use this when the user asks for trading signals, decisions, or what to do from OpenAI or Qwen models. " +
-            "IMPORTANT: Always use trader_id parameter (e.g., 'openai_trader', 'qwen_trader') since both traders use 'groq' as the model name. " +
-            "The traderId can be 'openai_trader', 'qwen_trader', or just 'openai'/'qwen' (will be mapped automatically to trader_id).",
+            "Process payment for model access. This calls the server's payment endpoint to create a Hedera transaction. " +
+            "Payment is handled server-side (not by PaymentProcessor agent). " +
+            "After payment succeeds, you should notify PaymentProcessor agent for acknowledgment. " +
+            "This tool should be called for each model (OpenAI, Qwen) that needs payment.",
           schema: z.object({
-            traderId: z
+            modelName: z
               .string()
-              .describe(
-                "Trader ID or name. Examples: 'openai_trader', 'qwen_trader', 'openai', 'qwen'. " +
-                "Will be automatically mapped to the correct trader_id. Note: Both traders use 'groq' model, so always use trader_id, not model name."
-              ),
+              .describe("Model name: 'OpenAI' or 'Qwen'")
           }),
         }
       );
@@ -688,11 +648,39 @@ export function createAIRoutes(agentManager) {
           console.log(`[AI-PURCHASE]    Message: ${message}`);
           console.log(`[AI-PURCHASE]    Input: { agentId: "${agentId}", message: "${message.substring(0, 50)}..." }`);
           
+          // Determine workflow phase based on agent name
+          let phase = "general";
+          const agentIdLower = agentId.toLowerCase();
+          if (agentIdLower.includes("payment")) {
+            phase = "payment";
+          } else if (agentIdLower.includes("dataanalyzer") || agentIdLower.includes("analyzer")) {
+            phase = "signal";
+          } else if (agentIdLower.includes("tradeexecutor") || agentIdLower.includes("executor")) {
+            phase = "execution";
+          }
+          
           sendEvent("tool", {
             tool: "send_message_to_agent",
             status: "starting",
             input: { agentId, message: message.substring(0, 100) }
           });
+          
+          // Send agent conversation event
+          sendEvent("agent_conversation", {
+            from: "Orchestrator",
+            to: agentId,
+            message: message.substring(0, 200),
+            phase: phase
+          });
+          
+          // Send workflow step event
+          if (phase !== "general") {
+            sendEvent("workflow_step", {
+              step: phase,
+              status: "starting",
+              message: `Starting ${phase} phase with ${agentId}`
+            });
+          }
 
           try {
             let agentName = `Agent ${agentId}`;
@@ -873,6 +861,23 @@ export function createAIRoutes(agentManager) {
                   response: response
                 }));
 
+                // Send agent response event
+                sendEvent("agent_response", {
+                  from: agentName,
+                  response: responseText,
+                  phase: phase,
+                  fullResponse: response
+                });
+                
+                // Send workflow step completion event
+                if (phase !== "general") {
+                  sendEvent("workflow_step", {
+                    step: phase,
+                    status: "completed",
+                    message: `${phase} phase completed with ${agentName}`
+                  });
+                }
+
                 sendEvent("response", {
                   type: "agent_response",
                   agentName: agentName,
@@ -900,6 +905,23 @@ export function createAIRoutes(agentManager) {
               success: true,
               response: response
             }));
+
+            // Send agent response event
+            sendEvent("agent_response", {
+              from: agentName,
+              response: responseText,
+              phase: phase,
+              fullResponse: response
+            });
+            
+            // Send workflow step completion event
+            if (phase !== "general") {
+              sendEvent("workflow_step", {
+                step: phase,
+                status: "completed",
+                message: `${phase} phase completed with ${agentName}`
+              });
+            }
 
             sendEvent("response", {
               type: "agent_response",
@@ -964,64 +986,60 @@ export function createAIRoutes(agentManager) {
       );
 
 
-      // System prompt
-      const systemPrompt = `You are a User Agent that helps users discover and communicate with specialized agents 
-on the Hedera blockchain using the A2A (Agent-to-Agent) protocol.
+      // System prompt - Orchestrator Agent Workflow
+      const systemPrompt = `You are an Orchestrator Agent that coordinates a complete trading workflow using A2A (Agent-to-Agent) protocol.
 
-Your workflow:
-1. When a user asks about trading signals, decisions, or what to do (long/short/wait) from AI models (like OpenAI or Qwen):
-   - FIRST, use get_trading_signal with the trader_id (e.g., "openai_trader" or "qwen_trader") to get the ACTUAL trading signal
-   - This tool returns the real trading decision (long/short/wait) so the user can copy what to do at that moment
-   - The trading signal includes: decisions (actual trading actions - THIS IS THE MOST IMPORTANT - long/short/wait with symbols and quantities)
-   - Also includes: input_prompt, chain_of_thought (AI reasoning), and raw_response for context
-   - ALWAYS highlight the DECISIONS prominently at the end - show what the AI decided: long, short, or wait, with symbols, quantities, and leverage
-   - The user wants to see the trading decision so they can copy it - make this the main focus
+When a user requests to purchase trading signals and execute trades, you MUST follow this exact workflow:
 
-2. When a user asks a question or makes a request that's NOT about trading signals:
-   - First, try to use discover_agents to find relevant agents. This will first check for local agents on the server, 
-     and fall back to blockchain discovery if needed.
-   - If blockchain discovery fails due to rate limits, use the local agents that are returned.
-   - The user's query often mentions specific AI models (like OpenAI or Qwen) - look for agents with matching names or capabilities.
-   - Analyze the discovered agents to select the most appropriate one based on the user's request.
+**PHASE 1: DISCOVERY**
+1. Use discover_agents to find these three agents:
+   - PaymentProcessor (capabilities: ["process_payment", "verify", "escrow"])
+   - DataAnalyzer (capabilities: ["analyze", "predict", "report"])
+   - TradeExecutor (capabilities: ["execute", "trade", "exchange"])
+2. Verify all three agents are found. If any are missing, use respond_to_user to inform the user.
 
-3. Get detailed information about the selected agent (if needed):
-   - Use get_agent_card with the agent's ID to understand its capabilities, endpoint, and description
-   - This helps you understand if the agent is suitable for the user's request
-   - If the agent card fetch fails, you can still try to communicate with the agent using its ID
+**PHASE 2: PAYMENT**
+1. Extract the model name(s) from the user's request (OpenAI, Qwen, or both)
+2. For each model, process payment:
+   - FIRST, call process_payment tool with modelName to create server-side Hedera transaction
+   - Wait for payment confirmation (txHash)
+   - THEN, send A2A message to PaymentProcessor: "Payment processed for [modelName]. Transaction: [txHash]. Please acknowledge."
+   - Wait for PaymentProcessor's acknowledgment response
+   - Use respond_to_user to show: "✅ Payment processed for [modelName]. Transaction: [txHash]"
+3. If payment fails for any model, stop and inform the user via respond_to_user.
 
-4. Communicate with the agent (if needed):
-   - Use send_message_to_agent to send the user's message (or a refined version based on the agent's capabilities)
-   - Include any necessary context from the conversation
-   - The tool handles payment automatically if required
-   - For follow-up messages to the same agent, use the same contextId to maintain conversation context
+**PHASE 3: SIGNAL RETRIEVAL**
+1. After all payments are confirmed, request trading signals:
+   - For each model, send A2A message to DataAnalyzer: "Get the latest trading signal from [modelName] AI trading model. I need the complete signal including: decisions (long/short/wait actions with symbols and quantities), chain_of_thought, input_prompt, and account_state."
+   - Wait for DataAnalyzer's response containing the trading signal
+   - Parse and store the signal data, especially the decisions array
+2. Use respond_to_user to show the retrieved signals: "📊 Trading signal retrieved for [modelName]: [decision summary]"
 
-5. Handle responses and communicate with the user:
-   - When you get trading signal data, present it clearly showing:
-     * The input prompt that was sent to the AI
-     * The chain of thought (AI's reasoning process)
-     * The final decisions (long/short/wait actions with symbols, quantities, etc.) - THIS IS THE MOST IMPORTANT PART
-     * Any account state information (equity, PnL, positions)
-   - Use respond_to_user to relay all information to the user
-   - Format trading data nicely - highlight the decisions prominently since that's what the user wants to see
-   - Always end with respond_to_user - never just call a tool without following up
+**PHASE 4: TRADE EXECUTION**
+1. After all signals are retrieved, execute trades:
+   - Send A2A message to TradeExecutor: "Execute trades based on the following trading signals: [paste complete signal data from all models]"
+   - Include all trading signal data (decisions, chain_of_thought, input_prompt, account_state)
+   - Wait for TradeExecutor's confirmation
+2. Use respond_to_user to show: "🚀 Trade execution initiated. TradeExecutor received and processed the signals."
 
-Key points:
-- For trading signal requests: ALWAYS use get_trading_signal FIRST (this gets REAL trading signal from the Go API server at ${TRADING_API_URL})
-- The trading signal contains DECISIONS (long/short/wait actions) - THIS IS WHAT THE USER WANTS TO SEE
-- The user wants to copy the trading decision (long/short/wait) at that moment - show the decisions prominently
-- The decisions array contains: action (long/short/wait), symbol, quantity, leverage, price - format this clearly
-- Also show chain_of_thought and input_prompt for context, but DECISIONS should be the main focus
-- When the user asks to execute trades or "execute trade", find the TradeExecutor agent using discover_agents
-- Send the trading signal (with decisions) directly to the TradeExecutor agent using send_message_to_agent
-- The TradeExecutor agent will receive the signal and respond with mock confirmation (e.g., "Received signal: SHORT BTCUSDT 100")
-- Local agents are preferred and checked first - these are agents registered on the local server
-- If blockchain discovery fails due to rate limits, work with local agents or inform the user
-- Communication happens via A2A (Agent-to-Agent) protocol over JSON-RPC
-- Some agents require payment (handled automatically by send_message_to_agent)
-- Use contextId to maintain conversation state across multiple messages
-- Always use respond_to_user to communicate with the user - this is how you provide answers and ask questions
-- After every tool call, use respond_to_user to relay the results to the user
-- Present trading decisions clearly - the user wants to see what the AI decided (long/short/wait) at the end of your response`;
+**PHASE 5: COMPLETION**
+1. Use respond_to_user with final summary:
+   "✅ Complete! All trades executed successfully based on [modelNames] trading signals.
+   📊 Signals retrieved and processed.
+   🚀 TradeExecutor has received and executed the trades according to the AI trading model decisions."
+
+**CRITICAL RULES:**
+- ALL communication MUST go through A2A protocol using send_message_to_agent - NO direct API calls
+- Use respond_to_user after EACH phase to show progress to the user
+- Maintain separate contextId for each agent conversation
+- If any phase fails, stop immediately and use respond_to_user to inform the user with clear error message
+- Always show agent-to-agent conversations transparently via respond_to_user
+- Format agent responses clearly: "💬 Orchestrator → [Agent]: [message]" and "📨 [Agent]: [response]"
+
+**Agent Communication Format:**
+- When sending to agent: "💬 Orchestrator → [AgentName]: [message]"
+- When receiving response: "📨 [AgentName]: [response]"
+- Show workflow phase clearly: "💳 Payment Phase", "📊 Signal Phase", "🚀 Execution Phase"`;
 
       console.log("[AI-PURCHASE] ✅ Groq model initialized");
       sendEvent("status", { 
@@ -1037,7 +1055,8 @@ Key points:
         tools: [
           discoverAgentsTool,
           getAgentCardTool,
-          getTradingSignalTool, // NEW: Tool to get actual trading signals from Go API
+          processPaymentTool, // Server-side payment processing
+          // getTradingSignalTool REMOVED - now handled by DataAnalyzer agent via A2A
           respondToUserTool,
           sendMessageToAgentTool,
         ],

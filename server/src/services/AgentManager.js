@@ -315,6 +315,21 @@ export class AgentManager {
       return `Agent ${agent.name} received: ${message}`;
     }
 
+    // SPECIAL HANDLING: DataAnalyzer agent - fetch real trading signals
+    if (agent.name === "DataAnalyzer" && message.toLowerCase().includes("trading signal")) {
+      try {
+        const tradingSignal = await this.fetchTradingSignalForDataAnalyzer(message);
+        if (tradingSignal) {
+          // Include real signal data in context so AI can format it
+          context.realTradingSignal = tradingSignal;
+          console.log(`[AgentManager] Fetched real trading signal for DataAnalyzer: ${tradingSignal.trader_id || 'unknown'}`);
+        }
+      } catch (error) {
+        console.error(`[AgentManager] Error fetching trading signal for DataAnalyzer:`, error.message);
+        // Continue without signal - let AI handle error
+      }
+    }
+
     try {
       return await this.groqService.processAgentMessage({
         agent,
@@ -326,6 +341,54 @@ export class AgentManager {
       console.error(`Error processing AI message for agent ${agentId}:`, error);
       // Fallback response if AI fails
       return `Agent ${agent.name} received your message: ${message}. (AI processing unavailable)`;
+    }
+  }
+
+  /**
+   * Fetch trading signal for DataAnalyzer agent
+   * Extracts model name from message and fetches from Go API
+   */
+  async fetchTradingSignalForDataAnalyzer(message) {
+    const TRADING_API_URL = process.env.TRADING_API_URL || "http://172.23.240.1:8080";
+    const axios = (await import("axios")).default;
+    
+    // Extract model name from message
+    let traderId = null;
+    const messageLower = message.toLowerCase();
+    
+    if (messageLower.includes("openai")) {
+      traderId = "openai_trader";
+    } else if (messageLower.includes("qwen")) {
+      traderId = "qwen_trader";
+    } else {
+      // Try to find model name in message
+      const openaiMatch = message.match(/openai/i);
+      const qwenMatch = message.match(/qwen/i);
+      if (openaiMatch) traderId = "openai_trader";
+      else if (qwenMatch) traderId = "qwen_trader";
+    }
+    
+    if (!traderId) {
+      console.log(`[AgentManager] Could not extract trader_id from message: ${message.substring(0, 100)}`);
+      return null;
+    }
+    
+    try {
+      const url = `${TRADING_API_URL}/api/trading-signal?trader_id=${traderId}`;
+      console.log(`[AgentManager] Fetching trading signal from: ${url}`);
+      
+      const response = await axios.get(url, { timeout: 10000 });
+      
+      if (response.data && response.data.success !== false) {
+        console.log(`[AgentManager] ✅ Trading signal retrieved: ${traderId}`);
+        return response.data;
+      } else {
+        console.warn(`[AgentManager] Trading signal API returned error for ${traderId}`);
+        return null;
+      }
+    } catch (error) {
+      console.error(`[AgentManager] Error fetching trading signal:`, error.message);
+      throw error;
     }
   }
 }

@@ -100,9 +100,11 @@ export class GroqService {
     const agentType = agent.metadata?.type || "general";
     const model = this.getModelForAgentType(agentType);
 
+    // Use real trading signal from context if available (from AgentManager for DataAnalyzer)
+    let tradingData = context.realTradingSignal || null;
+
     // For trading agents, fetch latest trading signal from nofx API if payment is verified
-    let tradingData = null;
-    if (agentType === "trading" && context.paymentVerified) {
+    if (!tradingData && agentType === "trading" && context.paymentVerified) {
       try {
         tradingData = await this.fetchTradingSignal(agent);
         console.log(`[GroqService] Fetched trading signal for ${agent.name}`);
@@ -244,7 +246,7 @@ export class GroqService {
 
     // Include trading data in the prompt if available
     if (tradingData) {
-      prompt += `\n\n=== LATEST TRADING SIGNAL FROM NOFX SYSTEM ===`;
+      prompt += `\n\n=== REAL TRADING SIGNAL DATA (DO NOT GENERATE FAKE DATA - USE THIS) ===`;
       prompt += `\nTrader: ${tradingData.trader_name || tradingData.trader_id || 'Unknown'}`;
       prompt += `\nAI Model: ${tradingData.ai_model || 'Unknown'}`;
       prompt += `\nCycle #${tradingData.cycle_number || 'N/A'}`;
@@ -258,9 +260,11 @@ export class GroqService {
       if (tradingData.decisions && Array.isArray(tradingData.decisions)) {
         prompt += `\n\nTrading Decisions (${tradingData.decisions.length}):`;
         tradingData.decisions.forEach((decision, idx) => {
-          prompt += `\n  [${idx + 1}] ${decision.symbol || 'ALL'}: ${decision.action || 'N/A'}`;
+          prompt += `\n  [${idx + 1}] Symbol: ${decision.symbol || 'ALL'}, Action: ${decision.action || 'N/A'}`;
+          if (decision.quantity) prompt += `, Quantity: ${decision.quantity}`;
+          if (decision.leverage) prompt += `, Leverage: ${decision.leverage}x`;
           if (decision.reasoning || decision.error) {
-            prompt += ` - ${decision.reasoning || decision.error}`;
+            prompt += `\n     Reasoning: ${decision.reasoning || decision.error}`;
           }
         });
       }
@@ -269,12 +273,22 @@ export class GroqService {
         prompt += `\n\nAccount State:`;
         prompt += `\n  Total Equity: ${tradingData.account_state.total_equity || 'N/A'} USDT`;
         prompt += `\n  Available Balance: ${tradingData.account_state.available_balance || 'N/A'} USDT`;
+        prompt += `\n  Total PnL: ${tradingData.account_state.total_pnl || 'N/A'} USDT`;
         prompt += `\n  Position Count: ${tradingData.account_state.position_count || 0}`;
         prompt += `\n  Margin Used: ${tradingData.account_state.margin_used_pct || 0}%`;
       }
       
-      prompt += `\n\n=== END TRADING SIGNAL ===`;
-      prompt += `\n\nBased on this real-time trading data, provide a helpful response to the user's query. If the user is asking about trading signals, decisions, or market analysis, use this data to provide accurate and up-to-date information.`;
+      if (tradingData.input_prompt) {
+        prompt += `\n\nInput Prompt (context sent to trading AI):`;
+        prompt += `\n${tradingData.input_prompt.substring(0, 500)}...`;
+      }
+      
+      prompt += `\n\n=== END OF REAL TRADING SIGNAL DATA ===`;
+      prompt += `\n\nIMPORTANT: You have received REAL trading signal data above. Format and return this EXACT data.`;
+      prompt += `\nDO NOT generate fake data like AAPL or GOOG. Use the REAL decisions array from above.`;
+      prompt += `\nThe decisions array contains crypto symbols like BTCUSDT, ETHUSDT, SOLUSDT, etc. or "ALL" for wait actions.`;
+      prompt += `\nFormat the response clearly showing the decisions (most important), chain_of_thought, input_prompt, and account_state.`;
+      prompt += `\nInclude the full signal data in JSON format so the orchestrator can forward it to TradeExecutor.`;
     }
 
     return prompt;
