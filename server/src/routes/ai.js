@@ -251,6 +251,8 @@ export function createAIRoutes(agentManager) {
         model: "llama-3.3-70b-versatile",
         temperature: 0.7,
         apiKey: GROQ_CONFIG.API_KEY,
+        // Ensure tool calling is enabled
+        maxTokens: 4096,
       });
 
       sendEvent("status", { 
@@ -699,13 +701,19 @@ export function createAIRoutes(agentManager) {
             try {
               const agentsResponse = await axios.get(`${SERVER_URL}/api/agents`);
               const localAgents = agentsResponse.data.agents || [];
+              // Try to find agent by ID first, then by name (case-insensitive)
               const localAgent = localAgents.find(
-                (a) => a.id === agentId || a.id.toString() === agentId.toString()
+                (a) => a.id === agentId || 
+                       a.id.toString() === agentId.toString() ||
+                       a.name?.toLowerCase() === agentId.toLowerCase()
               );
 
               if (localAgent) {
                 agentName = localAgent.name || agentName;
-                a2aEndpoint = `${SERVER_URL}/api/agents/${agentId}/a2a`;
+                // Use the actual agent ID from the local agent, not the provided agentId
+                const actualAgentId = localAgent.id.toString();
+                a2aEndpoint = `${SERVER_URL}/api/agents/${actualAgentId}/a2a`;
+                console.log(`[AI-PURCHASE]    ✅ Found local agent: ${agentName} (ID: ${actualAgentId})`);
               } else {
                 try {
                   const cardUrl = `${SERVER_URL}/api/agents/${agentId}/.well-known/agent-card.json`;
@@ -1058,6 +1066,16 @@ Key points:
           break; // Success
         } catch (error) {
           lastError = error;
+          
+          // Log detailed error information for tool_use_failed errors
+          if (error.message?.includes("tool_use_failed") || error.message?.includes("Failed to call a function")) {
+            console.error(`[AI-PURCHASE] ❌ Tool calling error detected:`);
+            console.error(`[AI-PURCHASE]    Error: ${error.message}`);
+            if (error.response?.data) {
+              console.error(`[AI-PURCHASE]    Response data:`, JSON.stringify(error.response.data, null, 2));
+            }
+          }
+          
           if (attempt === maxRetries) {
             throw error;
           }
