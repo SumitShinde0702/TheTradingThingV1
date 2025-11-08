@@ -3,10 +3,10 @@ package decision
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"lia/market"
 	"lia/mcp"
 	"lia/pool"
+	"log"
 	"strings"
 	"time"
 )
@@ -286,7 +286,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- Freely use sequence data, you can perform but not limited to: trend analysis, pattern recognition, support/resistance, technical resistance levels, Fibonacci, volatility band calculations\n")
 	sb.WriteString("- Multi-dimensional cross-validation (price + volume + OI + indicators + sequence patterns)\n")
 	sb.WriteString("- Use the methods you consider most effective to discover high-confidence opportunities\n")
-	sb.WriteString("- Only open positions when comprehensive confidence ≥ 65 (lowered from 75 for more trading activity)\n\n")
+	sb.WriteString("- Only open positions when comprehensive confidence ≥ 75\n\n")
 	sb.WriteString("**Avoid low-quality signals**:\n")
 	sb.WriteString("- Single dimension (only looking at one indicator)\n")
 	sb.WriteString("- Contradictory (price up but volume shrinking)\n")
@@ -301,7 +301,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("  → 🔍 Deep reflection:\n")
 	sb.WriteString("     • Trading frequency too high? (>2 trades/hour is excessive)\n")
 	sb.WriteString("     • Holding time too short? (<30 minutes is premature exit)\n")
-	sb.WriteString("     • Signal strength insufficient? (confidence <65)\n")
+	sb.WriteString("     • Signal strength insufficient? (confidence <75)\n")
 	sb.WriteString("     • Are you shorting? (one-sided long-only is wrong)\n\n")
 	sb.WriteString("**Sharpe Ratio -0.5 ~ 0** (slight losses):\n")
 	sb.WriteString("  → ⚠️ Strict control: only trades with confidence >80\n")
@@ -335,7 +335,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("]\n```\n\n")
 	sb.WriteString("**Field descriptions**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
-	sb.WriteString("- `confidence`: 0-100 (recommend ≥65 for opening positions, ≥75 for high-quality trades)\n")
+	sb.WriteString("- `confidence`: 0-100 (recommend ≥75 for opening positions)\n")
 	sb.WriteString("- Required for opening: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
 	sb.WriteString("- If no actions: use `{\"symbol\": \"ALL\", \"action\": \"wait\", \"reasoning\": \"your reason\"}`\n\n")
 

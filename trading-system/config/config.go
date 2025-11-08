@@ -11,7 +11,7 @@ import (
 type TraderConfig struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"` // Whether this trader is enabled
+	Enabled bool   `json:"enabled"`  // Whether this trader is enabled
 	AIModel string `json:"ai_model"` // "groq", "qwen", "deepseek", or "custom"
 
 	// Exchange selection (choose one)
@@ -63,14 +63,40 @@ type Config struct {
 	MaxDailyLoss       float64        `json:"max_daily_loss"`
 	MaxDrawdown        float64        `json:"max_drawdown"`
 	StopTradingMinutes int            `json:"stop_trading_minutes"`
-	Leverage           LeverageConfig `json:"leverage"` // Leverage configuration
-	
+	Leverage           LeverageConfig `json:"leverage"`             // Leverage configuration
+	AutoTakeProfitPct  float64        `json:"auto_take_profit_pct"` // Auto close at this P&L % (0 = disabled, 1.0 = 1%)
+
 	// Supabase configuration (optional - for cloud database storage)
-	SupabaseURL          string `json:"supabase_url,omitempty"`           // Supabase project URL (e.g., https://xxxxx.supabase.co)
-	SupabaseKey          string `json:"supabase_key,omitempty"`           // Supabase API key (anon or service_role)
-	SupabaseDatabaseURL  string `json:"supabase_database_url,omitempty"`   // Direct PostgreSQL connection string (optional, preferred)
-	UseSupabase          bool   `json:"use_supabase,omitempty"`           // Enable Supabase instead of SQLite
-	SupabaseSchema       string `json:"supabase_schema,omitempty"`        // Database schema name (default: "public")
+	SupabaseURL         string `json:"supabase_url,omitempty"`          // Supabase project URL (e.g., https://xxxxx.supabase.co)
+	SupabaseKey         string `json:"supabase_key,omitempty"`          // Supabase API key (anon or service_role)
+	SupabaseDatabaseURL string `json:"supabase_database_url,omitempty"` // Direct PostgreSQL connection string (optional, preferred)
+	UseSupabase         bool   `json:"use_supabase,omitempty"`          // Enable Supabase instead of SQLite
+	SupabaseSchema      string `json:"supabase_schema,omitempty"`       // Database schema name (default: "public")
+
+	// Multi-agent configuration (optional - experimental)
+	MultiAgent *MultiAgentConfig `json:"multi_agent,omitempty"`
+}
+
+// MultiAgentConfig is imported from multi-agent package
+// We define it here to avoid circular imports
+type MultiAgentConfig struct {
+	Enabled       bool          `json:"enabled"`        // Enable multi-agent mode
+	ConsensusMode string        `json:"consensus_mode"` // "voting", "weighted", "unanimous", "best"
+	FastFirst     bool          `json:"fast_first"`     // Use fast-first (don't wait for all)
+	MinAgents     int           `json:"min_agents"`     // Minimum agents needed (for fast-first)
+	MaxWaitTime   int           `json:"max_wait_time"`  // Max wait time in seconds
+	Agents        []AgentConfig `json:"agents"`         // List of agents
+}
+
+// AgentConfig configuration for a single agent in multi-agent system
+type AgentConfig struct {
+	ID        string  `json:"id"`                   // Unique agent ID
+	Name      string  `json:"name"`                 // Agent display name
+	Model     string  `json:"model"`                // "groq", "qwen", "deepseek", or "custom"
+	APIKey    string  `json:"api_key"`              // API key for this agent
+	GroqModel string  `json:"groq_model,omitempty"` // Groq model name (if using Groq)
+	Role      string  `json:"role,omitempty"`       // Agent role: "technical", "momentum", "risk", "trend"
+	Weight    float64 `json:"weight,omitempty"`     // Weight for weighted consensus (0.0-1.0)
 }
 
 // LoadConfig loads configuration from file

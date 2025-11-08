@@ -3,10 +3,12 @@ package trader
 import (
 	"encoding/json"
 	"fmt"
+	"lia/config"
 	decisionPkg "lia/decision"
 	"lia/logger"
 	"lia/market"
 	"lia/mcp"
+	multiagent "lia/multi-agent"
 	"lia/pool"
 	"log"
 	"math/rand"
@@ -66,6 +68,9 @@ type AutoTraderConfig struct {
 	MaxDailyLoss    float64       // Maximum daily loss percentage (hint)
 	MaxDrawdown     float64       // Maximum drawdown percentage (hint)
 	StopTradingTime time.Duration // Pause duration after risk control trigger
+
+	// Auto take profit (paper trading only)
+	AutoTakeProfitPct float64 // Auto close at this P&L % (0 = disabled, 1.0 = 1%)
 }
 
 // SupabaseConfig configuration for Supabase database (aliased from logger package)
@@ -89,10 +94,16 @@ type AutoTrader struct {
 	startTime             time.Time        // System startup time
 	callCount             int              // AI call count
 	positionFirstSeenTime map[string]int64 // Position first seen time (symbol_side -> timestamp in milliseconds)
+	multiAgentConfig      interface{}      // Multi-agent config (avoid circular import - use interface{})
 }
 
 // NewAutoTrader creates auto trader
 func NewAutoTrader(config AutoTraderConfig, supabaseConfig *SupabaseConfig) (*AutoTrader, error) {
+	return NewAutoTraderWithMultiAgent(config, supabaseConfig, nil)
+}
+
+// NewAutoTraderWithMultiAgent creates auto trader with optional multi-agent config
+func NewAutoTraderWithMultiAgent(config AutoTraderConfig, supabaseConfig *SupabaseConfig, multiAgentConfig interface{}) (*AutoTrader, error) {
 	// Set default values
 	if config.ID == "" {
 		config.ID = "default_trader"
@@ -212,12 +223,12 @@ func NewAutoTrader(config AutoTraderConfig, supabaseConfig *SupabaseConfig) (*Au
 
 		// Restore paper trader state from latest decision record
 		// Database is seeded, so there should always be at least one record
-		log.Printf("🔄 [%s] Restoring balance from latest Supabase record...", config.Name)
+		log.Printf("🔄 [%s] Restoring balance from latest database record...", config.Name)
 		var paperTrader *PaperTrader
 		paperTrader, err := restorePaperTraderState(restoredInitialBalance, tempLogger)
 		if err != nil {
 			log.Printf("❌ [%s] Failed to restore from database: %v", config.Name, err)
-			log.Printf("💡 [%s] Make sure the seed migration has been run in Supabase for trader_id='%s'", config.Name, config.ID)
+			log.Printf("💡 [%s] Make sure the database has been initialized for trader_id='%s'", config.Name, config.ID)
 			log.Printf("💡 [%s] Falling back to config initial balance: %.2f USDT", config.Name, config.InitialBalance)
 			paperTrader = NewPaperTrader(config.InitialBalance)
 		} else {
@@ -321,6 +332,7 @@ func NewAutoTrader(config AutoTraderConfig, supabaseConfig *SupabaseConfig) (*Au
 		callCount:             0,
 		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
+		multiAgentConfig:      multiAgentConfig,
 	}, nil
 }
 
@@ -331,6 +343,16 @@ func (at *AutoTrader) Run() error {
 	log.Printf("[%s] 💰 Initial balance: %.2f USDT", at.name, at.initialBalance)
 	log.Printf("[%s] ⚙️  Scan interval: %v", at.name, at.config.ScanInterval)
 	log.Printf("[%s] 🤖 AI will autonomously decide leverage, position size, stop loss/take profit, etc.", at.name)
+
+	// Log auto take profit status
+	if at.exchange == "paper" && at.config.AutoTakeProfitPct > 0 {
+		log.Printf("[%s] 🎯 Auto Take Profit: ENABLED (%.2f%% P&L target)", at.name, at.config.AutoTakeProfitPct)
+		log.Printf("[%s]    Positions will auto-close at %.2f%% profit (with leverage)", at.name, at.config.AutoTakeProfitPct)
+	} else if at.exchange == "paper" {
+		log.Printf("[%s] ⚠️  Auto Take Profit: DISABLED (set auto_take_profit_pct in config to enable)", at.name)
+	} else {
+		log.Printf("[%s] ℹ️  Auto Take Profit: Paper trading only (current exchange: %s)", at.name, at.exchange)
+	}
 
 	ticker := time.NewTicker(at.config.ScanInterval)
 	defer ticker.Stop()
@@ -370,9 +392,9 @@ func (at *AutoTrader) Stop() {
 func (at *AutoTrader) runCycle() error {
 	at.callCount++
 
-	log.Printf("\n[%s] " + strings.Repeat("=", 70), at.name)
+	log.Printf("\n[%s] "+strings.Repeat("=", 70), at.name)
 	log.Printf("[%s] ⏰ %s - AI Decision Cycle #%d", at.name, time.Now().Format("2006-01-02 15:04:05"), at.callCount)
-	log.Printf("[%s] " + strings.Repeat("=", 70), at.name)
+	log.Printf("[%s] "+strings.Repeat("=", 70), at.name)
 
 	// Create decision record
 	record := &logger.DecisionRecord{
@@ -395,6 +417,33 @@ func (at *AutoTrader) runCycle() error {
 		at.dailyPnL = 0
 		at.lastResetTime = time.Now()
 		log.Println("📅 Daily P&L reset")
+	}
+
+	// 2.5. Check auto take profit and stop loss (paper trading only)
+	if at.exchange == "paper" && at.config.AutoTakeProfitPct > 0 {
+		if paperTrader, ok := at.trader.(*PaperTrader); ok {
+			toClose, err := paperTrader.CheckAutoTakeProfit(at.config.AutoTakeProfitPct)
+			if err != nil {
+				log.Printf("⚠️  Failed to check auto take profit: %v", err)
+			} else if len(toClose) > 0 {
+				log.Printf("🎯 Auto-closing %d position(s) due to take profit/stop loss", len(toClose))
+				for _, pos := range toClose {
+					var closeErr error
+					if pos.Side == "long" {
+						_, closeErr = at.trader.CloseLong(pos.Symbol, 0)
+					} else {
+						_, closeErr = at.trader.CloseShort(pos.Symbol, 0)
+					}
+					if closeErr != nil {
+						log.Printf("❌ Failed to auto-close %s %s: %v", pos.Symbol, pos.Side, closeErr)
+					} else {
+						log.Printf("✅ Auto-closed %s %s: %s", pos.Symbol, pos.Side, pos.Reason)
+					}
+				}
+				// After auto-closing, rebuild context to reflect new positions
+				// (will happen in step 3 below)
+			}
+		}
 	}
 
 	// 3. Collect trading context
@@ -437,9 +486,39 @@ func (at *AutoTrader) runCycle() error {
 	log.Printf("📊 Account equity: %.2f USDT | Available: %.2f USDT | Positions: %d",
 		ctx.Account.TotalEquity, ctx.Account.AvailableBalance, ctx.Account.PositionCount)
 
-	// 4. Call AI to get full decision
+	// 4. Call AI to get full decision (multi-agent or single-agent)
 	log.Println("🤖 Requesting AI analysis and decision...")
-	decision, err := decisionPkg.GetFullDecision(ctx, at.mcpClient)
+
+	var decision *decisionPkg.FullDecision
+	// err is already declared from buildTradingContext above
+
+	// Check if multi-agent is enabled
+	if at.multiAgentConfig != nil {
+		// Use multi-agent consensus
+		cfg, ok := at.multiAgentConfig.(*config.MultiAgentConfig)
+		if ok && cfg != nil && cfg.Enabled {
+			// Convert config.MultiAgentConfig to multiagent.MultiAgentConfig
+			maConfig := convertToMultiAgentConfig(cfg)
+			if maConfig != nil {
+				log.Printf("🤖 [Multi-Agent] Using multi-agent consensus (mode: %s)", maConfig.ConsensusMode)
+				decision, err = multiagent.GetMultiAgentDecision(ctx, maConfig)
+				if err != nil {
+					log.Printf("⚠️  Multi-agent decision failed, falling back to single-agent: %v", err)
+					// Fallback to single-agent
+					decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
+				}
+			} else {
+				log.Printf("⚠️  Failed to convert multi-agent config, using single-agent")
+				decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
+			}
+		} else {
+			// Multi-agent config exists but not enabled, use single-agent
+			decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
+		}
+	} else {
+		// No multi-agent config, use single-agent
+		decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
+	}
 
 	// Save chain of thought, decision, and input prompt even if there's an error (for debugging)
 	// CRITICAL: GetFullDecision should always return a decision (with fallback), so decision should never be nil

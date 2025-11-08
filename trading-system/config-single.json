@@ -1,0 +1,62 @@
+{
+    "traders": [
+      {
+        "id": "openai_trader_single",
+        "name": "OpenAI Trader (Single-Agent)",
+        "enabled": true,
+        "ai_model": "groq",
+        "exchange": "paper",
+        "groq_key": "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",
+        "groq_model": "openai/gpt-oss-120b",
+        "initial_balance": 10000.0,
+        "scan_interval_minutes": 1
+      },
+      {
+        "id": "qwen_trader_single",
+        "name": "Qwen Trader (Single-Agent)",
+        "enabled": true,
+        "ai_model": "groq",
+        "exchange": "paper",
+        "groq_key": "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",
+        "groq_model": "qwen/qwen3-32b",
+        "initial_balance": 10000.0,
+        "scan_interval_minutes": 1
+      }
+    ],
+    "leverage": {
+      "btc_eth_leverage": 10,
+      "altcoin_leverage": 10
+    },
+    "use_default_coins": true,
+    "default_coins": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "HYPEUSDT"
+    ],
+    "coin_pool_api_url": "",
+    "oi_top_api_url": "",
+    "api_server_port": 8080,
+    "max_daily_loss": 10.0,
+    "max_drawdown": 20.0,
+    "stop_trading_minutes": 60,
+    "auto_take_profit_pct": 0,
+    "use_supabase": false,
+    "supabase_url": "",
+    "supabase_key": "",
+    "supabase_database_url": "",
+    "supabase_schema": "public",
+    "multi_agent": {
+      "enabled": false,
+      "consensus_mode": "voting",
+      "fast_first": true,
+      "min_agents": 2,
+      "max_wait_time": 15,
+      "agents": []
+    }
+  }
+  

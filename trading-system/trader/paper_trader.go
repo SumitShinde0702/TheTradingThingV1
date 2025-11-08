@@ -38,6 +38,8 @@ type PaperPosition struct {
 	Leverage   int
 	EntryTime  time.Time
 	MarginUsed float64
+	StopLoss   float64 // Stop loss price level (0 if not set)
+	TakeProfit float64 // Take profit price level (0 if not set)
 }
 
 // NewPaperTrader Creates a paper trading simulator
@@ -385,13 +387,27 @@ func (t *PaperTrader) getMarketPrice(symbol string) (float64, error) {
 
 // SetStopLoss 设置止损（模拟）
 func (t *PaperTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
-	// 模拟：不需要实际操作（可以记录用于未来实现自动止损）
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	key := symbol + "_" + positionSide
+	if pos, exists := t.positions[key]; exists {
+		pos.StopLoss = stopPrice
+		log.Printf("  📌 [Simulated] Stop loss set for %s %s: %.4f", symbol, positionSide, stopPrice)
+	}
 	return nil
 }
 
 // SetTakeProfit 设置止盈（模拟）
 func (t *PaperTrader) SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error {
-	// 模拟：不需要实际操作（可以记录用于未来实现自动止盈）
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	key := symbol + "_" + positionSide
+	if pos, exists := t.positions[key]; exists {
+		pos.TakeProfit = takeProfitPrice
+		log.Printf("  📌 [Simulated] Take profit set for %s %s: %.4f", symbol, positionSide, takeProfitPrice)
+	}
 	return nil
 }
 
@@ -399,6 +415,106 @@ func (t *PaperTrader) SetTakeProfit(symbol string, positionSide string, quantity
 func (t *PaperTrader) CancelAllOrders(symbol string) error {
 	// 模拟：不需要实际操作
 	return nil
+}
+
+// CheckAutoTakeProfit checks positions against auto take profit and stop loss levels
+// Returns list of positions that should be auto-closed (symbol, side, reason)
+func (t *PaperTrader) CheckAutoTakeProfit(autoTakeProfitPct float64) ([]struct {
+	Symbol string
+	Side   string
+	Reason string
+}, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var toClose []struct {
+		Symbol string
+		Side   string
+		Reason string
+	}
+
+	for _, pos := range t.positions {
+		currentPrice, err := t.getMarketPrice(pos.Symbol)
+		if err != nil {
+			continue // Skip if can't get price
+		}
+
+		// Calculate P&L percentage (with leverage)
+		var pnlPct float64
+		if pos.Side == "LONG" {
+			priceChange := (currentPrice - pos.EntryPrice) / pos.EntryPrice
+			pnlPct = priceChange * 100 * float64(pos.Leverage) // P&L % with leverage
+		} else {
+			priceChange := (pos.EntryPrice - currentPrice) / pos.EntryPrice
+			pnlPct = priceChange * 100 * float64(pos.Leverage) // P&L % with leverage
+		}
+
+		// Check auto take profit (1% P&L target)
+		if autoTakeProfitPct > 0 && pnlPct >= autoTakeProfitPct {
+			side := strings.ToLower(pos.Side)
+			toClose = append(toClose, struct {
+				Symbol string
+				Side   string
+				Reason string
+			}{
+				Symbol: pos.Symbol,
+				Side:   side,
+				Reason: fmt.Sprintf("Auto take profit: %.2f%% P&L (target: %.2f%%)", pnlPct, autoTakeProfitPct),
+			})
+			log.Printf("  🎯 [Auto-Close] %s %s: %.2f%% P&L reached (target: %.2f%%)", pos.Symbol, side, pnlPct, autoTakeProfitPct)
+			continue
+		}
+
+		// Check stop loss (if set)
+		if pos.StopLoss > 0 {
+			shouldStop := false
+			if pos.Side == "LONG" && currentPrice <= pos.StopLoss {
+				shouldStop = true
+			} else if pos.Side == "SHORT" && currentPrice >= pos.StopLoss {
+				shouldStop = true
+			}
+
+			if shouldStop {
+				side := strings.ToLower(pos.Side)
+				toClose = append(toClose, struct {
+					Symbol string
+					Side   string
+					Reason string
+				}{
+					Symbol: pos.Symbol,
+					Side:   side,
+					Reason: fmt.Sprintf("Stop loss triggered: price %.4f hit stop loss %.4f", currentPrice, pos.StopLoss),
+				})
+				log.Printf("  🛑 [Auto-Close] %s %s: Stop loss triggered (price: %.4f, stop: %.4f)", pos.Symbol, side, currentPrice, pos.StopLoss)
+			}
+		}
+
+		// Check take profit (if set and not using auto take profit)
+		if pos.TakeProfit > 0 && autoTakeProfitPct == 0 {
+			shouldTakeProfit := false
+			if pos.Side == "LONG" && currentPrice >= pos.TakeProfit {
+				shouldTakeProfit = true
+			} else if pos.Side == "SHORT" && currentPrice <= pos.TakeProfit {
+				shouldTakeProfit = true
+			}
+
+			if shouldTakeProfit {
+				side := strings.ToLower(pos.Side)
+				toClose = append(toClose, struct {
+					Symbol string
+					Side   string
+					Reason string
+				}{
+					Symbol: pos.Symbol,
+					Side:   side,
+					Reason: fmt.Sprintf("Take profit triggered: price %.4f hit take profit %.4f", currentPrice, pos.TakeProfit),
+				})
+				log.Printf("  ✅ [Auto-Close] %s %s: Take profit triggered (price: %.4f, target: %.4f)", pos.Symbol, side, currentPrice, pos.TakeProfit)
+			}
+		}
+	}
+
+	return toClose, nil
 }
 
 // FormatQuantity 格式化数量（模拟）

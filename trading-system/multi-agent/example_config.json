@@ -1,0 +1,39 @@
+{
+  "multi_agent": {
+    "enabled": true,
+    "consensus_mode": "voting",
+    "fast_first": true,
+    "min_agents": 2,
+    "max_wait_time": 5,
+    "agents": [
+      {
+        "id": "agent_1",
+        "name": "Technical Analysis Agent",
+        "model": "groq",
+        "api_key": "YOUR_GROQ_API_KEY",
+        "groq_model": "openai/gpt-oss-120b",
+        "role": "technical",
+        "weight": 0.4
+      },
+      {
+        "id": "agent_2",
+        "name": "Momentum Agent",
+        "model": "groq",
+        "api_key": "YOUR_GROQ_API_KEY",
+        "groq_model": "qwen/qwen3-32b",
+        "role": "momentum",
+        "weight": 0.3
+      },
+      {
+        "id": "agent_3",
+        "name": "Risk Management Agent",
+        "model": "groq",
+        "api_key": "YOUR_GROQ_API_KEY",
+        "groq_model": "openai/gpt-oss-120b",
+        "role": "risk",
+        "weight": 0.3
+      }
+    ]
+  }
+}
+

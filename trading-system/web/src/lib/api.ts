@@ -14,7 +14,18 @@ import {
 } from './supabase';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const API_BASE_MULTI = import.meta.env.VITE_API_URL_MULTI || 'http://localhost:8081/api';
 const USE_SUPABASE = import.meta.env.VITE_USE_SUPABASE !== 'false'; // Default to true if not set
+
+// Helper to determine which backend to use based on trader ID
+const getApiBase = (traderId?: string): string => {
+  // If trader ID contains "_multi", use multi-agent backend (port 8081)
+  if (traderId && traderId.includes('_multi')) {
+    return API_BASE_MULTI;
+  }
+  // Otherwise use default backend (port 8080)
+  return API_BASE;
+};
 
 // Helper to check if Supabase is properly configured
 const isSupabaseConfigured = () => {
@@ -33,24 +44,61 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
 };
 
 export const api = {
-  // 竞赛相关接口
+  // 竞赛相关接口 - combines data from both backends
   async getCompetition(): Promise<CompetitionData> {
-    const res = await fetch(`${API_BASE}/competition`);
-    if (!res.ok) throw new Error('获取竞赛数据失败');
-    return res.json();
+    // Fetch from both backends
+    const promises = [
+      fetch(`${API_BASE}/competition`).catch(() => null), // Single-agent
+      fetch(`${API_BASE_MULTI}/competition`).catch(() => null), // Multi-agent
+    ];
+    
+    const results = await Promise.all(promises);
+    const allTraders: any[] = [];
+    
+    // Combine traders from both backends
+    for (const res of results) {
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.traders && Array.isArray(data.traders)) {
+          allTraders.push(...data.traders);
+        }
+      }
+    }
+    
+    // Return combined competition data
+    return {
+      traders: allTraders,
+      timestamp: new Date().toISOString(),
+    };
   },
 
   async getTraders(): Promise<TraderInfo[]> {
-    const res = await fetch(`${API_BASE}/traders`);
-    if (!res.ok) throw new Error('获取trader列表失败');
-    return res.json();
+    // Fetch from both backends and combine
+    const promises = [
+      fetch(`${API_BASE}/traders`).catch(() => null), // Single-agent (port 8080)
+      fetch(`${API_BASE_MULTI}/traders`).catch(() => null), // Multi-agent (port 8081)
+    ];
+    
+    const results = await Promise.all(promises);
+    const allTraders: TraderInfo[] = [];
+    
+    // Combine traders from both backends
+    for (const res of results) {
+      if (res && res.ok) {
+        const traders = await res.json();
+        allTraders.push(...traders);
+      }
+    }
+    
+    return allTraders;
   },
 
   // 获取系统状态（支持trader_id）
   async getStatus(traderId?: string): Promise<SystemStatus> {
+    const base = getApiBase(traderId);
     const url = traderId
-      ? `${API_BASE}/status?trader_id=${traderId}`
-      : `${API_BASE}/status`;
+      ? `${base}/status?trader_id=${traderId}`
+      : `${base}/status`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('获取系统状态失败');
     return res.json();
@@ -58,9 +106,10 @@ export const api = {
 
   // 获取账户信息（支持trader_id）
   async getAccount(traderId?: string): Promise<AccountInfo> {
+    const base = getApiBase(traderId);
     const url = traderId
-      ? `${API_BASE}/account?trader_id=${traderId}`
-      : `${API_BASE}/account`;
+      ? `${base}/account?trader_id=${traderId}`
+      : `${base}/account`;
     
     try {
       const res = await fetch(url, {
@@ -92,9 +141,10 @@ export const api = {
 
   // 获取持仓列表（支持trader_id）
   async getPositions(traderId?: string): Promise<Position[]> {
+    const base = getApiBase(traderId);
     const url = traderId
-      ? `${API_BASE}/positions?trader_id=${traderId}`
-      : `${API_BASE}/positions`;
+      ? `${base}/positions?trader_id=${traderId}`
+      : `${base}/positions`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('获取持仓列表失败');
     return res.json();
@@ -115,9 +165,10 @@ export const api = {
     }
     
     // Fallback to backend API
+    const base = getApiBase(traderId);
     const url = traderId
-      ? `${API_BASE}/decisions?trader_id=${traderId}`
-      : `${API_BASE}/decisions`;
+      ? `${base}/decisions?trader_id=${traderId}`
+      : `${base}/decisions`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('获取决策日志失败');
     return res.json();
@@ -143,9 +194,10 @@ export const api = {
     }
     
     // Fallback to backend API (or use if Supabase not configured)
+    const base = getApiBase(traderId);
     const url = traderId
-      ? `${API_BASE}/decisions/latest?trader_id=${traderId}`
-      : `${API_BASE}/decisions/latest`;
+      ? `${base}/decisions/latest?trader_id=${traderId}`
+      : `${base}/decisions/latest`;
     const res = await fetch(url);
     if (!res.ok) {
       const errorText = await res.text();
@@ -172,9 +224,10 @@ export const api = {
     }
     
     // Fallback to backend API
+    const base = getApiBase(traderId);
     const url = traderId
-      ? `${API_BASE}/statistics?trader_id=${traderId}`
-      : `${API_BASE}/statistics`;
+      ? `${base}/statistics?trader_id=${traderId}`
+      : `${base}/statistics`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('获取统计信息失败');
     return res.json();
@@ -216,9 +269,10 @@ export const api = {
     }
     
     // Fallback to backend API
+    const base = getApiBase(traderId);
     let url = traderId
-      ? `${API_BASE}/equity-history?trader_id=${traderId}`
-      : `${API_BASE}/equity-history`;
+      ? `${base}/equity-history?trader_id=${traderId}`
+      : `${base}/equity-history`;
     
     // 如果指定了startCycle，添加到URL参数
     if (startCycle !== undefined && startCycle > 0) {
@@ -232,9 +286,10 @@ export const api = {
 
   // 获取AI学习表现分析（支持trader_id）
   async getPerformance(traderId?: string): Promise<any> {
+    const base = getApiBase(traderId);
     const url = traderId
-      ? `${API_BASE}/performance?trader_id=${traderId}`
-      : `${API_BASE}/performance`;
+      ? `${base}/performance?trader_id=${traderId}`
+      : `${base}/performance`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('获取AI学习数据失败');
     return res.json();
@@ -242,7 +297,8 @@ export const api = {
 
   // 获取最新交易信号（支持trader_id或model）
   async getTradingSignal(traderId?: string, model?: string): Promise<any> {
-    let url = `${API_BASE}/trading-signal`;
+    const base = getApiBase(traderId);
+    let url = `${base}/trading-signal`;
     const params = new URLSearchParams();
     if (traderId) {
       params.append('trader_id', traderId);
@@ -261,7 +317,8 @@ export const api = {
   async closePosition(traderId: string, symbol: string, side: string): Promise<{ success: boolean; symbol: string; side: string; result?: any; error?: string }> {
     // Normalize side to lowercase
     const normalizedSide = side.toLowerCase();
-    const url = `${API_BASE}/positions/close?trader_id=${encodeURIComponent(traderId)}`;
+    const base = getApiBase(traderId);
+    const url = `${base}/positions/close?trader_id=${encodeURIComponent(traderId)}`;
     console.log('🔵 Calling close position API:', { url, traderId, symbol, side: normalizedSide });
     
     try {
@@ -338,7 +395,8 @@ export const api = {
   async forceClosePosition(traderId: string, symbol: string, side: string, quantity?: number): Promise<{ success: boolean; symbol: string; side: string; result?: any; error?: string }> {
     // Normalize side to lowercase
     const normalizedSide = side.toLowerCase();
-    const url = `${API_BASE}/positions/force-close?trader_id=${encodeURIComponent(traderId)}`;
+    const base = getApiBase(traderId);
+    const url = `${base}/positions/force-close?trader_id=${encodeURIComponent(traderId)}`;
     try {
       const res = await fetch(url, {
         method: 'POST',

@@ -62,6 +62,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		MaxDailyLoss:          maxDailyLoss,
 		MaxDrawdown:           maxDrawdown,
 		StopTradingTime:       time.Duration(stopTradingMinutes) * time.Minute,
+		AutoTakeProfitPct:     globalConfig.AutoTakeProfitPct, // Auto take profit percentage
 	}
 
 	// Build Supabase config if enabled
@@ -78,8 +79,15 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		log.Printf("📊 Supabase enabled for trader '%s'", cfg.Name)
 	}
 
+	// Pass multi-agent config if enabled
+	var multiAgentConfig interface{}
+	if globalConfig != nil && globalConfig.MultiAgent != nil && globalConfig.MultiAgent.Enabled {
+		multiAgentConfig = globalConfig.MultiAgent
+		log.Printf("🤖 Multi-agent enabled for trader '%s'", cfg.Name)
+	}
+	
 	// Create trader instance
-	at, err := trader.NewAutoTrader(traderConfig, supabaseConfig)
+	at, err := trader.NewAutoTraderWithMultiAgent(traderConfig, supabaseConfig, multiAgentConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create trader: %w", err)
 	}
