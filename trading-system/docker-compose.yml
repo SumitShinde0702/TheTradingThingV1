@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # Backend service (API and core logic)
+  lia:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.backend
+    container_name: lia-trading
+    restart: unless-stopped
+    ports:
+      - "${LIA_BACKEND_PORT:-8080}:8080"
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./decision_logs:/app/decision_logs
+      - /etc/localtime:/etc/localtime:ro  # Sync host time
+    environment:
+      - TZ=${LIA_TIMEZONE:-Asia/Shanghai}  # Set timezone
+    networks:
+      - lia-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Frontend service (static serving and proxy)
+  lia-frontend:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.frontend
+    container_name: lia-frontend
+    restart: unless-stopped
+    ports:
+      - "${LIA_FRONTEND_PORT:-3000}:80"
+    networks:
+      - lia-network
+    depends_on:
+      - lia
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+networks:
+  lia-network:
+    driver: bridge

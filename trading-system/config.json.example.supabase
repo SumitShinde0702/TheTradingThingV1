@@ -1,0 +1,45 @@
+{
+  "use_supabase": true,
+  "supabase_database_url": "postgresql://postgres:YOUR_PASSWORD@db.xxxxx.supabase.co:5432/postgres",
+  "supabase_schema": "public",
+  "traders": [
+    {
+      "id": "openai_trader",
+      "name": "OpenAI Trader",
+      "enabled": true,
+      "ai_model": "groq",
+      "exchange": "paper",
+      "grok_key": "your_grok_api_key",
+      "initial_balance": 10000,
+      "scan_interval_minutes": 3
+    },
+    {
+      "id": "qwen_trader",
+      "name": "Qwen Trader",
+      "enabled": true,
+      "ai_model": "qwen",
+      "exchange": "paper",
+      "qwen_key": "your_qwen_api_key",
+      "initial_balance": 10000,
+      "scan_interval_minutes": 3
+    }
+  ],
+  "leverage": {
+    "btc_eth_leverage": 5,
+    "altcoin_leverage": 5
+  },
+  "use_default_coins": true,
+  "default_coins": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT"
+  ],
+  "coin_pool_api_url": "",
+  "oi_top_api_url": "",
+  "api_server_port": 8080,
+  "max_daily_loss": 10.0,
+  "max_drawdown": 20.0,
+  "stop_trading_minutes": 60
+}
+

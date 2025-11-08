@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: lia-backend
+    env: go
+    buildCommand: go mod download && go build -o lia
+    startCommand: bash -c "if [ ! -f config.json ]; then cp config.json.example config.json; fi && ./lia"
+    envVars:
+      - key: PORT
+        sync: false
+    healthCheckPath: /health
