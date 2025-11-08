@@ -6,7 +6,7 @@
         "enabled": true,
         "ai_model": "groq",
         "exchange": "paper",
-        "groq_key": "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",
+        "groq_key": "",
         "groq_model": "openai/gpt-oss-120b",
         "initial_balance": 10000.0,
         "scan_interval_minutes": 1
@@ -17,7 +17,7 @@
         "enabled": true,
         "ai_model": "groq",
         "exchange": "paper",
-        "groq_key": "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",
+        "groq_key": "",
         "groq_model": "qwen/qwen3-32b",
         "initial_balance": 10000.0,
         "scan_interval_minutes": 1
