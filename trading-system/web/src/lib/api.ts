@@ -15,6 +15,7 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const API_BASE_MULTI = import.meta.env.VITE_API_URL_MULTI || 'http://localhost:8081/api';
+const API_BASE_ETF = import.meta.env.VITE_API_URL_ETF || 'http://localhost:8082/api';
 const USE_SUPABASE = import.meta.env.VITE_USE_SUPABASE !== 'false'; // Default to true if not set
 
 // Helper to determine which backend to use based on trader ID
@@ -68,8 +69,43 @@ export const api = {
     // Return combined competition data
     return {
       traders: allTraders,
-      timestamp: new Date().toISOString(),
+      count: allTraders.length,
     };
+  },
+
+  // Portfolio overview (ETF-like aggregated view)
+  async getPortfolio(apiBase?: string): Promise<any> {
+    const base = apiBase || API_BASE_ETF;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), 10000); // Increased to 10 seconds
+      
+      const res = await fetch(`${base}/portfolio`, {
+        signal: controller.signal,
+        cache: 'no-cache', // Prevent caching issues
+      });
+      
+      if (timeoutId) clearTimeout(timeoutId);
+      
+      if (!res.ok) {
+        throw new Error(`Failed to fetch portfolio: ${res.statusText} (${res.status})`);
+      }
+      return res.json();
+    } catch (error: any) {
+      if (timeoutId) clearTimeout(timeoutId);
+      // More specific error messages
+      if (error.name === 'AbortError') {
+        throw new Error('Request timeout - backend may be slow to respond');
+      }
+      if (error.name === 'TypeError' || 
+          error.message?.includes('Failed to fetch') || 
+          error.message?.includes('ERR_CONNECTION_REFUSED') ||
+          error.message?.includes('NetworkError')) {
+        throw new Error('Cannot connect to ETF portfolio backend on port 8082. Make sure RUN_ETF_PORTFOLIO.bat is running.');
+      }
+      throw error;
+    }
   },
 
   async getTraders(): Promise<TraderInfo[]> {

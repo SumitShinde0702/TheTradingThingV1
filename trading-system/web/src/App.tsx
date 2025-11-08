@@ -3,6 +3,7 @@ import useSWR from 'swr';
 import { api } from './lib/api';
 import { EquityChart } from './components/EquityChart';
 import { CompetitionPage } from './components/CompetitionPage';
+import { PortfolioView } from './components/PortfolioView';
 import { ExperimentalDashboard } from './components/ExperimentalDashboard';
 import AILearning from './components/AILearning';
 import { TradingSignal } from './components/TradingSignal';
@@ -18,7 +19,7 @@ import type {
   TraderInfo,
 } from './types';
 
-type Page = 'competition' | 'trader';
+type Page = 'competition' | 'trader' | 'portfolio';
 
 function App() {
   const { language, setLanguage } = useLanguage();
@@ -29,6 +30,9 @@ function App() {
     const hash = window.location.hash;
     if (hash === '#trader' || hash === '#details') {
       return 'trader';
+    }
+    if (hash === '#portfolio') {
+      return 'portfolio';
     }
     return 'competition';
   };
@@ -43,6 +47,8 @@ function App() {
       const hash = window.location.hash;
       if (hash === '#trader' || hash === '#details') {
         setCurrentPage('trader');
+      } else if (hash === '#portfolio') {
+        setCurrentPage('portfolio');
       } else {
         setCurrentPage('competition');
       }
@@ -57,6 +63,8 @@ function App() {
     setCurrentPage(page);
     if (page === 'trader') {
       window.location.hash = '#trader';
+    } else if (page === 'portfolio') {
+      window.location.hash = '#portfolio';
     } else {
       window.location.hash = '';
     }
@@ -259,6 +267,16 @@ function App() {
                   {t('competition', language)}
                 </button>
                 <button
+                  onClick={() => navigateToPage('portfolio')}
+                  className="px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-semibold transition-all"
+                  style={currentPage === 'portfolio'
+                    ? { background: '#F0B90B', color: '#000' }
+                    : { background: 'transparent', color: '#848E9C' }
+                  }
+                >
+                  📊 Portfolio
+                </button>
+                <button
                   onClick={() => navigateToPage('trader')}
                   className="px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-semibold transition-all"
                   style={currentPage === 'trader'
@@ -333,6 +351,8 @@ function App() {
           <ExperimentalDashboard onExit={() => setExperimentalMode(false)} />
         ) : currentPage === 'competition' ? (
           <CompetitionPage />
+        ) : currentPage === 'portfolio' ? (
+          <PortfolioView />
         ) : (
           <TraderDetailsPage
             selectedTrader={selectedTrader}

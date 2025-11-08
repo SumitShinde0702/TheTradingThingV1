@@ -1,0 +1,117 @@
+{
+    "traders": [
+        {
+            "id": "llama_scalper",
+            "name": "Llama 3.1 8B Scalper",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "paper",
+            "groq_key": "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",
+            "groq_model": "llama-3.1-8b-instant",
+            "initial_balance": 4000.0,
+            "scan_interval_minutes": 1
+        },
+        {
+            "id": "llama_analyzer",
+            "name": "Llama 3.3 70B Analyzer",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "paper",
+            "groq_key": "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",
+            "groq_model": "llama-3.3-70b-versatile",
+            "initial_balance": 2000.0,
+            "scan_interval_minutes": 5
+        },
+        {
+            "id": "qwen_single",
+            "name": "Qwen Single-Agent",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "paper",
+            "groq_key": "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",
+            "groq_model": "qwen/qwen3-32b",
+            "initial_balance": 2000.0,
+            "scan_interval_minutes": 3
+        },
+        {
+            "id": "gpt20b_fast",
+            "name": "GPT OSS 20B Fast",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "paper",
+            "groq_key": "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",
+            "groq_model": "openai/gpt-oss-20b",
+            "initial_balance": 1000.0,
+            "scan_interval_minutes": 2
+        },
+        {
+            "id": "openai_multi",
+            "name": "OpenAI Multi-Agent",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "paper",
+            "groq_key": "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",
+            "groq_model": "openai/gpt-oss-120b",
+            "initial_balance": 500.0,
+            "scan_interval_minutes": 5
+        },
+        {
+            "id": "qwen_multi",
+            "name": "Qwen Multi-Agent",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "paper",
+            "groq_key": "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",
+            "groq_model": "qwen/qwen3-32b",
+            "initial_balance": 300.0,
+            "scan_interval_minutes": 3
+        },
+        {
+            "id": "openai_single",
+            "name": "OpenAI Single-Agent",
+            "enabled": false,
+            "ai_model": "groq",
+            "exchange": "paper",
+            "groq_key": "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",
+            "groq_model": "openai/gpt-oss-120b",
+            "initial_balance": 200.0,
+            "scan_interval_minutes": 5
+        }
+    ],
+    "leverage": {
+        "btc_eth_leverage": 10,
+        "altcoin_leverage": 10
+    },
+    "use_default_coins": true,
+    "default_coins": [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+        "DOGEUSDT",
+        "ADAUSDT",
+        "HYPEUSDT"
+    ],
+    "coin_pool_api_url": "",
+    "oi_top_api_url": "",
+    "api_server_port": 8082,
+    "max_daily_loss": 10.0,
+    "max_drawdown": 20.0,
+    "stop_trading_minutes": 60,
+    "auto_take_profit_pct": 0,
+    "use_supabase": false,
+    "supabase_url": "",
+    "supabase_key": "",
+    "supabase_database_url": "",
+    "supabase_schema": "public",
+    "multi_agent": {
+        "enabled": false,
+        "consensus_mode": "best",
+        "fast_first": true,
+        "min_agents": 2,
+        "max_wait_time": 15,
+        "agents": []
+    }
+}
+

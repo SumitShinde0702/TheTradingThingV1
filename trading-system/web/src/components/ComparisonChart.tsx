@@ -63,7 +63,7 @@ const withAlpha = (hexColor: string, alpha: number) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-export type TimePeriod = '24h' | '7d' | '30d';
+export type TimePeriod = '10m' | '1h' | '6h' | '24h' | '7d' | '30d';
 
 interface TimePeriodOption {
   value: TimePeriod;
@@ -71,6 +71,9 @@ interface TimePeriodOption {
 }
 
 const timePeriodOptions: TimePeriodOption[] = [
+  { value: '10m', label: 'Last 10 Minutes' },
+  { value: '1h', label: 'Last 1 Hour' },
+  { value: '6h', label: 'Last 6 Hours' },
   { value: '24h', label: 'Last 24 Hours' },
   { value: '7d', label: 'Last 7 Days' },
   { value: '30d', label: 'Last Month' },
@@ -541,6 +544,15 @@ export function ComparisonChart({ traders, timePeriod = '24h', onStatsUpdate }: 
     let cutoffTime: Date;
     
     switch (timePeriod) {
+      case '10m':
+        cutoffTime = new Date(now.getTime() - 10 * 60 * 1000);
+        break;
+      case '1h':
+        cutoffTime = new Date(now.getTime() - 60 * 60 * 1000);
+        break;
+      case '6h':
+        cutoffTime = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+        break;
       case '24h':
         cutoffTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
         break;

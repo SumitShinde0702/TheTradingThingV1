@@ -3,12 +3,12 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-	"net/http"
 	"lia/logger"
 	"lia/manager"
 	"lia/market"
 	"lia/trader"
+	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +32,7 @@ func NewServer(traderManager *manager.TraderManager, port int) *Server {
 
 	// Add request logging middleware for debugging
 	router.Use(func(c *gin.Context) {
-		log.Printf("📥 Incoming request: %s %s%s (from %s)", 
+		log.Printf("📥 Incoming request: %s %s%s (from %s)",
 			c.Request.Method, c.Request.Host, c.Request.URL.Path, c.ClientIP())
 		c.Next()
 	})
@@ -79,18 +79,21 @@ func (s *Server) setupRoutes() {
 		// Competition overview
 		api.GET("/competition", s.handleCompetition)
 
+		// Portfolio overview (ETF-like aggregated view)
+		api.GET("/portfolio", s.handlePortfolio)
+
 		// Trader list
 		api.GET("/traders", s.handleTraderList)
 
 		// Trader-specific data (use query parameter ?trader_id=xxx)
 		api.GET("/status", s.handleStatus)
 		api.GET("/account", s.handleAccount)
-		
+
 		// Close position endpoints (must come before GET /positions to avoid route conflicts)
 		// Register POST routes first to ensure they're matched before GET routes
 		api.POST("/positions/close", s.handleClosePosition)
 		api.POST("/positions/force-close", s.handleForceClosePosition)
-		
+
 		// Position endpoints (GET must come after POST to avoid conflicts)
 		api.GET("/positions", s.handlePositions)
 		api.GET("/decisions", s.handleDecisions)
@@ -98,14 +101,14 @@ func (s *Server) setupRoutes() {
 		api.GET("/statistics", s.handleStatistics)
 		api.GET("/equity-history", s.handleEquityHistory)
 		api.GET("/performance", s.handlePerformance)
-		
+
 		// Trading Signal API - Get latest AI trading signal
 		api.GET("/trading-signal", s.handleTradingSignal)
 	}
 
 	// Add 404 handler for unmatched routes
 	s.router.NoRoute(func(c *gin.Context) {
-		log.Printf("❌ 404 - Route not found: %s %s%s", 
+		log.Printf("❌ 404 - Route not found: %s %s%s",
 			c.Request.Method, c.Request.Host, c.Request.URL.Path)
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": fmt.Sprintf("route not found: %s %s", c.Request.Method, c.Request.URL.Path),
@@ -145,6 +148,115 @@ func (s *Server) handleCompetition(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, comparison)
+}
+
+// handlePortfolio portfolio overview (ETF-like aggregated view of all traders)
+func (s *Server) handlePortfolio(c *gin.Context) {
+	traders := s.traderManager.GetAllTraders()
+
+	if len(traders) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"total_equity":    0.0,
+			"total_pnl":       0.0,
+			"total_pnl_pct":   0.0,
+			"total_positions": 0,
+			"agent_count":     0,
+			"agents":          []interface{}{},
+		})
+		return
+	}
+
+	totalEquity := 0.0
+	totalInitialBalance := 0.0
+	totalPositions := 0
+	agents := make([]map[string]interface{}, 0, len(traders))
+	allRunning := true
+
+	for _, t := range traders {
+		account, err := t.GetAccountInfo()
+		status := t.GetStatus()
+
+		initialBalance := 0.0
+		if ib, ok := status["initial_balance"].(float64); ok && ib > 0 {
+			initialBalance = ib
+		}
+
+		if err != nil {
+			log.Printf("⚠️  [%s] Failed to get account info: %v", t.GetName(), err)
+			// Use initial balance as fallback
+			equity := initialBalance
+			totalEquity += equity
+			totalInitialBalance += initialBalance
+
+			agents = append(agents, map[string]interface{}{
+				"trader_id":       t.GetID(),
+				"trader_name":     t.GetName(),
+				"ai_model":        t.GetAIModel(),
+				"equity":          equity,
+				"initial_balance": initialBalance,
+				"pnl":             0.0,
+				"pnl_pct":         0.0,
+				"position_count":  0,
+				"is_running":      status["is_running"],
+			})
+
+			if isRunning, ok := status["is_running"].(bool); ok && !isRunning {
+				allRunning = false
+			}
+			continue
+		}
+
+		equity := account["total_equity"].(float64)
+		pnl := account["total_pnl"].(float64)
+		pnlPct := account["total_pnl_pct"].(float64)
+
+		// Handle position_count as either int or float64
+		var positionCount int
+		if pc, ok := account["position_count"].(int); ok {
+			positionCount = pc
+		} else if pc, ok := account["position_count"].(float64); ok {
+			positionCount = int(pc)
+		} else {
+			positionCount = 0
+		}
+
+		totalEquity += equity
+		totalInitialBalance += initialBalance
+		totalPositions += positionCount
+
+		agents = append(agents, map[string]interface{}{
+			"trader_id":       t.GetID(),
+			"trader_name":     t.GetName(),
+			"ai_model":        t.GetAIModel(),
+			"equity":          equity,
+			"initial_balance": initialBalance,
+			"pnl":             pnl,
+			"pnl_pct":         pnlPct,
+			"position_count":  positionCount,
+			"is_running":      status["is_running"],
+		})
+
+		if isRunning, ok := status["is_running"].(bool); ok && !isRunning {
+			allRunning = false
+		}
+	}
+
+	totalPnL := totalEquity - totalInitialBalance
+	totalPnLPct := 0.0
+	if totalInitialBalance > 0 {
+		totalPnLPct = (totalPnL / totalInitialBalance) * 100
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total_equity":    totalEquity,
+		"initial_balance": totalInitialBalance,
+		"total_pnl":       totalPnL,
+		"total_pnl_pct":   totalPnLPct,
+		"total_positions": totalPositions,
+		"agent_count":     len(traders),
+		"is_running":      allRunning,
+		"agents":          agents,
+	})
 }
 
 // handleTraderList trader list
@@ -345,7 +457,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		c.JSON(http.StatusOK, []interface{}{})
 		return
 	}
-	
+
 	// Reverse to get chronological order (oldest to newest)
 	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
 		records[i], records[j] = records[j], records[i]
@@ -362,7 +474,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 			})
 			return
 		}
-		
+
 		// Filter records to only include from startCycle onwards
 		var filteredRecords []*logger.DecisionRecord
 		for _, record := range records {
@@ -370,14 +482,14 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 				filteredRecords = append(filteredRecords, record)
 			}
 		}
-		
+
 		if len(filteredRecords) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": fmt.Sprintf("No records found for cycle #%d or later", startCycle),
 			})
 			return
 		}
-		
+
 		records = filteredRecords
 		log.Printf("📊 Filtered equity history: starting from cycle #%d, %d records found", startCycle, len(records))
 	}
@@ -401,20 +513,20 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 	// 3. Otherwise use earliest record as baseline (so chart starts from 0%)
 	initialBalance := 0.0
 	useEarliestAsBaseline := false
-	
+
 	if len(records) == 0 {
 		// Return empty array instead of error - trader might not have any decisions yet
 		c.JSON(http.StatusOK, []interface{}{})
 		return
 	}
-	
+
 	// If startCycle is specified, use that cycle's equity as baseline
 	if startCycle > 0 {
 		// First record should be the specified startCycle (since we filtered)
 		if len(records) > 0 && records[0].CycleNumber >= startCycle {
 			initialBalance = records[0].AccountState.TotalBalance
 			useEarliestAsBaseline = true
-			log.Printf("📊 Using startCycle #%d (equity: %.2f USDT) as baseline - chart will start at 0%% from this point", 
+			log.Printf("📊 Using startCycle #%d (equity: %.2f USDT) as baseline - chart will start at 0%% from this point",
 				records[0].CycleNumber, initialBalance)
 		}
 	} else {
@@ -428,7 +540,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 				log.Printf("📊 Using cycle #1 as baseline: %.2f USDT", initialBalance)
 			}
 		}
-		
+
 		// If no cycle #1, use earliest available record as baseline (so chart starts from 0%)
 		if initialBalance == 0 {
 			// Use earliest record's equity as baseline
@@ -436,12 +548,12 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 			initialBalance = earliestRecord.AccountState.TotalBalance
 			useEarliestAsBaseline = true
 			if initialBalance > 0 {
-				log.Printf("📊 No cycle #1 found, using earliest record (cycle #%d) as baseline: %.2f USDT", 
+				log.Printf("📊 No cycle #1 found, using earliest record (cycle #%d) as baseline: %.2f USDT",
 					earliestRecord.CycleNumber, initialBalance)
 			}
 		}
 	}
-	
+
 	// If still unable to get, try to get from AutoTrader status
 	if initialBalance == 0 {
 		if status := trader.GetStatus(); status != nil {
@@ -451,7 +563,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 			}
 		}
 	}
-	
+
 	// If still unable to get, return error
 	if initialBalance == 0 {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -464,7 +576,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 	for _, record := range records {
 		// TotalBalance field actually stores TotalEquity
 		totalEquity := record.AccountState.TotalBalance
-		
+
 		// If using earliest record as baseline, ensure first record shows 0% PnL
 		// This avoids chart starting from negative values (if no true cycle #1)
 		totalPnL := totalEquity - initialBalance
@@ -472,7 +584,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		if initialBalance > 0 {
 			totalPnLPct = (totalPnL / initialBalance) * 100
 		}
-		
+
 		// If using earliest record as baseline and this is the first record, force to 0% to ensure chart starts from 0
 		if useEarliestAsBaseline && len(history) == 0 {
 			totalPnL = 0
@@ -502,7 +614,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		availableBalance, _ := currentAccount["available_balance"].(float64)
 		positionCount, _ := currentAccount["position_count"].(int)
 		marginUsedPct, _ := currentAccount["margin_used_pct"].(float64)
-		
+
 		// Calculate PnL relative to the baseline we're using for historical data
 		// This ensures consistency throughout the chart
 		totalPnL := totalEquity - initialBalance
@@ -510,7 +622,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		if initialBalance > 0 {
 			totalPnLPct = (totalPnL / initialBalance) * 100
 		}
-		
+
 		// If NOT using earliest as baseline (i.e., we have cycle #1), use GetAccountInfo values
 		// for consistency with leaderboard (which also uses cycle #1 initial balance)
 		if !useEarliestAsBaseline {
@@ -584,10 +696,10 @@ func (s *Server) handleTradingSignal(c *gin.Context) {
 	// Supports query by model or trader_id
 	model := c.Query("model")
 	traderID := c.Query("trader_id")
-	
+
 	var trader *trader.AutoTrader
 	var err error
-	
+
 	if traderID != "" {
 		// If trader_id is provided, use it directly
 		trader, err = s.traderManager.GetTrader(traderID)
@@ -617,7 +729,7 @@ func (s *Server) handleTradingSignal(c *gin.Context) {
 	} else {
 		// If neither is provided, return error
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Either 'model' or 'trader_id' parameter is required",
+			"error":   "Either 'model' or 'trader_id' parameter is required",
 			"example": "/api/trading-signal?model=openai or /api/trading-signal?trader_id=openai_trader",
 		})
 		return
@@ -641,7 +753,7 @@ func (s *Server) handleTradingSignal(c *gin.Context) {
 
 	// Get latest decision record (GetLatestRecords returns oldest to newest, so last one is newest)
 	latestRecord := records[len(records)-1]
-	
+
 	// Ensure AI responses are included (they're already stored in DB as RawResponse and CoTTrace)
 	// The record from GetLatestRecords already includes these fields from the database
 
@@ -653,7 +765,7 @@ func (s *Server) handleTradingSignal(c *gin.Context) {
 			decisionsArray = nil
 		}
 	}
-	
+
 	// If decision_json parsing fails, convert using decisions field
 	if decisionsArray == nil && len(latestRecord.Decisions) > 0 {
 		decisionsArray = make([]interface{}, len(latestRecord.Decisions))
@@ -679,9 +791,9 @@ func (s *Server) handleTradingSignal(c *gin.Context) {
 		"timestamp":        latestRecord.Timestamp.Format(time.RFC3339),
 		"cycle_number":     latestRecord.CycleNumber,
 		"success":          latestRecord.Success,
-		"chain_of_thought": latestRecord.CoTTrace,      // AI chain of thought (from database)
-		"input_prompt":     latestRecord.InputPrompt,   // Input prompt sent to AI (from database)
-		"raw_response":     latestRecord.RawResponse,   // AI raw response (from database)
+		"chain_of_thought": latestRecord.CoTTrace,    // AI chain of thought (from database)
+		"input_prompt":     latestRecord.InputPrompt, // Input prompt sent to AI (from database)
+		"raw_response":     latestRecord.RawResponse, // AI raw response (from database)
 		"decisions":        decisionsArray,
 		"account_state": map[string]interface{}{
 			"total_equity":      latestRecord.AccountState.TotalBalance,
@@ -769,10 +881,10 @@ func (s *Server) logManualClose(traderInstance *trader.AutoTrader, symbol, side 
 	}
 
 	record := &logger.DecisionRecord{
-		InputPrompt:    fmt.Sprintf("Manual close: %s %s at %.4f", symbol, side, closePrice),
-		CoTTrace:       "Manual position close by user",
-		DecisionJSON:   "{}",
-		RawResponse:    "",
+		InputPrompt:  fmt.Sprintf("Manual close: %s %s at %.4f", symbol, side, closePrice),
+		CoTTrace:     "Manual position close by user",
+		DecisionJSON: "{}",
+		RawResponse:  "",
 		AccountState: logger.AccountSnapshot{
 			TotalBalance:          totalBalance,
 			AvailableBalance:      availableBalance,
@@ -799,9 +911,9 @@ func (s *Server) logManualClose(traderInstance *trader.AutoTrader, symbol, side 
 // handleClosePosition closes a position
 func (s *Server) handleClosePosition(c *gin.Context) {
 	// Log incoming request details
-	log.Printf("🔍 Close position request received: method=%s, path=%s, query=%s", 
+	log.Printf("🔍 Close position request received: method=%s, path=%s, query=%s",
 		c.Request.Method, c.Request.URL.Path, c.Request.URL.RawQuery)
-	
+
 	_, traderID, err := s.getTraderFromQuery(c)
 	if err != nil {
 		log.Printf("❌ Close position: failed to get trader from query: %v", err)
@@ -819,8 +931,8 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 	if err != nil {
 		log.Printf("❌ Close position: trader not found: trader_id='%s', available=%v, error=%v", traderID, availableIDs, err)
 		c.JSON(http.StatusNotFound, gin.H{
-			"error":        err.Error(),
-			"trader_id":    traderID,
+			"error":         err.Error(),
+			"trader_id":     traderID,
 			"available_ids": availableIDs,
 		})
 		return
@@ -984,7 +1096,7 @@ func (s *Server) handleForceClosePosition(c *gin.Context) {
 	if quantity == 0 {
 		quantity = 0 // Close all
 	}
-	
+
 	if req.Side == "long" {
 		result, err = traderInterface.CloseLong(req.Symbol, quantity)
 	} else {

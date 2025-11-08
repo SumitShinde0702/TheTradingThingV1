@@ -85,7 +85,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		multiAgentConfig = globalConfig.MultiAgent
 		log.Printf("🤖 Multi-agent enabled for trader '%s'", cfg.Name)
 	}
-	
+
 	// Create trader instance
 	at, err := trader.NewAutoTraderWithMultiAgent(traderConfig, supabaseConfig, multiAgentConfig)
 	if err != nil {
