@@ -5,37 +5,96 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/adshao/go-binance/v2/futures"
 )
 
-// FuturesTrader 币安合约交易器
+// FuturesTrader Binance Futures trader
 type FuturesTrader struct {
 	client *futures.Client
 
-	// 余额缓存
+	// Balance cache
 	cachedBalance     map[string]interface{}
 	balanceCacheTime  time.Time
 	balanceCacheMutex sync.RWMutex
 
-	// 持仓缓存
+	// Positions cache
 	cachedPositions     []map[string]interface{}
 	positionsCacheTime  time.Time
 	positionsCacheMutex sync.RWMutex
 
-	// 缓存有效期（15秒）
+	// Cache duration (15 seconds)
 	cacheDuration time.Duration
+
+	// Multi-Assets Mode detection
+	isMultiAssetsMode bool
+	multiAssetsMutex  sync.RWMutex
+
+	// Time sync tracking
+	lastTimeSync  time.Time
+	timeSyncMutex sync.RWMutex
 }
 
 // NewFuturesTrader 创建合约交易器
 func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
 	client := futures.NewClient(apiKey, secretKey)
+
+	// Sync with Binance server time to avoid timestamp errors
+	syncServerTime(client)
+
 	return &FuturesTrader{
 		client:        client,
 		cacheDuration: 15 * time.Second, // 15秒缓存
 	}
+}
+
+// syncServerTime synchronizes client time with Binance server time
+func syncServerTime(client *futures.Client) {
+	// Get Binance server time
+	serverTime, err := client.NewServerTimeService().Do(context.Background())
+	if err != nil {
+		log.Printf("⚠️  Failed to get Binance server time: %v (will continue without sync)", err)
+		return
+	}
+
+	// Calculate time offset (server time - local time)
+	localTime := time.Now().UnixMilli()
+	timeOffset := serverTime - localTime
+
+	if timeOffset > 1000 || timeOffset < -1000 {
+		log.Printf("⚠️  Time offset detected: %d ms (local time is %s ahead/behind server)",
+			timeOffset,
+			func() string {
+				if timeOffset > 0 {
+					return fmt.Sprintf("%.1f seconds", float64(timeOffset)/1000.0)
+				}
+				return fmt.Sprintf("%.1f seconds", float64(-timeOffset)/1000.0)
+			}())
+		log.Printf("💡 Tip: Sync your system clock: Windows Settings > Time & Language > Date & Time > Sync now")
+	} else {
+		log.Printf("✓ Time synchronized with Binance server (offset: %d ms)", timeOffset)
+	}
+
+	// Note: go-binance library handles timestamps automatically
+	// If errors persist, sync system clock: Windows Settings > Time & Language > Sync now
+}
+
+// reSyncServerTime re-syncs server time (called on timestamp errors)
+func (t *FuturesTrader) reSyncServerTime() {
+	t.timeSyncMutex.Lock()
+	defer t.timeSyncMutex.Unlock()
+
+	// Don't re-sync too frequently (max once per minute)
+	if time.Since(t.lastTimeSync) < 1*time.Minute {
+		return
+	}
+
+	log.Printf("🔄 Re-syncing with Binance server time due to timestamp error...")
+	syncServerTime(t.client)
+	t.lastTimeSync = time.Now()
 }
 
 // GetBalance 获取账户余额（带缓存）
@@ -45,17 +104,29 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	if t.cachedBalance != nil && time.Since(t.balanceCacheTime) < t.cacheDuration {
 		cacheAge := time.Since(t.balanceCacheTime)
 		t.balanceCacheMutex.RUnlock()
-		log.Printf("✓ 使用缓存的账户余额（缓存时间: %.1f秒前）", cacheAge.Seconds())
+		log.Printf("✓ Using cached account balance (cached %.1f seconds ago)", cacheAge.Seconds())
 		return t.cachedBalance, nil
 	}
 	t.balanceCacheMutex.RUnlock()
 
 	// 缓存过期或不存在，调用API
-	log.Printf("🔄 缓存过期，正在调用币安API获取账户余额...")
+	log.Printf("🔄 Cache expired, calling Binance API to get account balance...")
 	account, err := t.client.NewGetAccountService().Do(context.Background())
 	if err != nil {
-		log.Printf("❌ 币安API调用失败: %v", err)
-		return nil, fmt.Errorf("获取账户信息失败: %w", err)
+		// If timestamp error, try re-syncing and retry once
+		if strings.Contains(err.Error(), "-1021") || strings.Contains(err.Error(), "recvWindow") || strings.Contains(err.Error(), "timestamp") {
+			log.Printf("⚠️  Timestamp error detected, re-syncing server time...")
+			t.reSyncServerTime()
+			// Retry once after re-sync
+			account, err = t.client.NewGetAccountService().Do(context.Background())
+			if err != nil {
+				log.Printf("❌ Binance API call failed after re-sync: %v", err)
+				return nil, fmt.Errorf("failed to get account info (timestamp error persists - please sync system clock): %w", err)
+			}
+		} else {
+			log.Printf("❌ Binance API call failed: %v", err)
+			return nil, fmt.Errorf("failed to get account info: %w", err)
+		}
 	}
 
 	result := make(map[string]interface{})
@@ -63,8 +134,14 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	result["availableBalance"], _ = strconv.ParseFloat(account.AvailableBalance, 64)
 	result["totalUnrealizedProfit"], _ = strconv.ParseFloat(account.TotalUnrealizedProfit, 64)
 
-	log.Printf("✓ 币安API返回: 总余额=%s, 可用=%s, 未实现盈亏=%s",
+	// Calculate margin balance (wallet + unrealized P&L) for clarity
+	walletBalance, _ := strconv.ParseFloat(account.TotalWalletBalance, 64)
+	unrealizedPnl, _ := strconv.ParseFloat(account.TotalUnrealizedProfit, 64)
+	marginBalance := walletBalance + unrealizedPnl
+
+	log.Printf("✓ Binance API returned: Wallet Balance=%s, Margin Balance=%.2f, Available=%s, Unrealized P&L=%s",
 		account.TotalWalletBalance,
+		marginBalance,
 		account.AvailableBalance,
 		account.TotalUnrealizedProfit)
 
@@ -84,16 +161,27 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
 		cacheAge := time.Since(t.positionsCacheTime)
 		t.positionsCacheMutex.RUnlock()
-		log.Printf("✓ 使用缓存的持仓信息（缓存时间: %.1f秒前）", cacheAge.Seconds())
+		log.Printf("✓ Using cached positions (cached %.1f seconds ago)", cacheAge.Seconds())
 		return t.cachedPositions, nil
 	}
 	t.positionsCacheMutex.RUnlock()
 
 	// 缓存过期或不存在，调用API
-	log.Printf("🔄 缓存过期，正在调用币安API获取持仓信息...")
+	log.Printf("🔄 Cache expired, calling Binance API to get positions...")
 	positions, err := t.client.NewGetPositionRiskService().Do(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("获取持仓失败: %w", err)
+		// If timestamp error, try re-syncing and retry once
+		if strings.Contains(err.Error(), "-1021") || strings.Contains(err.Error(), "recvWindow") || strings.Contains(err.Error(), "timestamp") {
+			log.Printf("⚠️  Timestamp error detected, re-syncing server time...")
+			t.reSyncServerTime()
+			// Retry once after re-sync
+			positions, err = t.client.NewGetPositionRiskService().Do(context.Background())
+			if err != nil {
+				return nil, fmt.Errorf("获取持仓失败 (timestamp error persists - please sync system clock): %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("获取持仓失败: %w", err)
+		}
 	}
 
 	var result []map[string]interface{}
@@ -149,7 +237,7 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 
 	// 如果当前杠杆已经是目标杠杆，跳过
 	if currentLeverage == leverage && currentLeverage > 0 {
-		log.Printf("  ✓ %s 杠杆已是 %dx，无需切换", symbol, leverage)
+		log.Printf("  ✓ %s leverage already %dx, no need to change", symbol, leverage)
 		return nil
 	}
 
@@ -162,16 +250,16 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 	if err != nil {
 		// 如果错误信息包含"No need to change"，说明杠杆已经是目标值
 		if contains(err.Error(), "No need to change") {
-			log.Printf("  ✓ %s 杠杆已是 %dx", symbol, leverage)
+			log.Printf("  ✓ %s leverage already %dx", symbol, leverage)
 			return nil
 		}
-		return fmt.Errorf("设置杠杆失败: %w", err)
+		return fmt.Errorf("failed to set leverage: %w", err)
 	}
 
-	log.Printf("  ✓ %s 杠杆已切换为 %dx", symbol, leverage)
+	log.Printf("  ✓ %s leverage switched to %dx", symbol, leverage)
 
-	// 切换杠杆后等待5秒（避免冷却期错误）
-	log.Printf("  ⏱ 等待5秒冷却期...")
+	// Wait 5 seconds after switching leverage (avoid cooldown error)
+	log.Printf("  ⏱ Waiting 5 seconds cooldown...")
 	time.Sleep(5 * time.Second)
 
 	return nil
@@ -179,24 +267,44 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 
 // SetMarginType 设置保证金模式
 func (t *FuturesTrader) SetMarginType(symbol string, marginType futures.MarginType) error {
+	// Check if already in Multi-Assets Mode - skip entirely if so
+	t.multiAssetsMutex.RLock()
+	if t.isMultiAssetsMode {
+		t.multiAssetsMutex.RUnlock()
+		log.Printf("  ⚠ %s account uses Multi-Assets Mode, skipping margin mode setting (not needed)", symbol)
+		return nil
+	}
+	t.multiAssetsMutex.RUnlock()
+
 	err := t.client.NewChangeMarginTypeService().
 		Symbol(symbol).
 		MarginType(marginType).
 		Do(context.Background())
 
 	if err != nil {
-		// 如果已经是该模式，不算错误
+		// If already in this mode, not an error
 		if contains(err.Error(), "No need to change") {
-			log.Printf("  ✓ %s 保证金模式已是 %s", symbol, marginType)
+			log.Printf("  ✓ %s margin mode already %s", symbol, marginType)
 			return nil
 		}
-		return fmt.Errorf("设置保证金模式失败: %w", err)
+		// Multi-Assets Mode (Unified Trading Account) doesn't support margin mode changes
+		// Error -4168: "Unable to adjust to isolated-margin mode under the Multi-Assets mode"
+		// Error -4050: "Cross balance insufficient" (also indicates Multi-Assets Mode)
+		if contains(err.Error(), "Multi-Assets mode") || contains(err.Error(), "-4168") || contains(err.Error(), "-4050") {
+			log.Printf("  ⚠ %s account uses Multi-Assets Mode, skipping margin mode setting (not needed)", symbol)
+			// Mark as Multi-Assets Mode for future orders
+			t.multiAssetsMutex.Lock()
+			t.isMultiAssetsMode = true
+			t.multiAssetsMutex.Unlock()
+			return nil // Not an error, just skip it
+		}
+		return fmt.Errorf("failed to set margin mode: %w", err)
 	}
 
-	log.Printf("  ✓ %s 保证金模式已切换为 %s", symbol, marginType)
+	log.Printf("  ✓ %s margin mode switched to %s", symbol, marginType)
 
-	// 切换保证金模式后等待3秒（避免冷却期错误）
-	log.Printf("  ⏱ 等待3秒冷却期...")
+	// Wait 3 seconds after switching margin mode (avoid cooldown error)
+	log.Printf("  ⏱ Waiting 3 seconds cooldown...")
 	time.Sleep(3 * time.Second)
 
 	return nil
@@ -225,21 +333,50 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 		return nil, err
 	}
 
-	// 创建市价买入订单
-	order, err := t.client.NewCreateOrderService().
+	// Determine position side based on account mode
+	t.multiAssetsMutex.RLock()
+	useBothSide := t.isMultiAssetsMode
+	t.multiAssetsMutex.RUnlock()
+
+	// Create market buy order
+	orderService := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeBuy).
-		PositionSide(futures.PositionSideTypeLong).
 		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		Do(context.Background())
+		Quantity(quantityStr)
 
-	if err != nil {
-		return nil, fmt.Errorf("开多仓失败: %w", err)
+	// Multi-Assets Mode requires PositionSideTypeBoth
+	if useBothSide {
+		orderService = orderService.PositionSide(futures.PositionSideTypeBoth)
+	} else {
+		orderService = orderService.PositionSide(futures.PositionSideTypeLong)
 	}
 
-	log.Printf("✓ 开多仓成功: %s 数量: %s", symbol, quantityStr)
-	log.Printf("  订单ID: %d", order.OrderID)
+	order, err := orderService.Do(context.Background())
+
+	if err != nil {
+		// If -4061 error (position side mismatch), try with BOTH and mark as Multi-Assets Mode
+		if contains(err.Error(), "-4061") || contains(err.Error(), "position side does not match") {
+			log.Printf("  ⚠ Detected Multi-Assets Mode, retrying with PositionSide BOTH...")
+			t.multiAssetsMutex.Lock()
+			t.isMultiAssetsMode = true
+			t.multiAssetsMutex.Unlock()
+			// Retry with BOTH
+			order, err = t.client.NewCreateOrderService().
+				Symbol(symbol).
+				Side(futures.SideTypeBuy).
+				PositionSide(futures.PositionSideTypeBoth).
+				Type(futures.OrderTypeMarket).
+				Quantity(quantityStr).
+				Do(context.Background())
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to open long position: %w", err)
+		}
+	}
+
+	log.Printf("✓ Long position opened: %s quantity: %s", symbol, quantityStr)
+	log.Printf("  Order ID: %d", order.OrderID)
 
 	result := make(map[string]interface{})
 	result["orderId"] = order.OrderID
@@ -271,21 +408,50 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 		return nil, err
 	}
 
-	// 创建市价卖出订单
-	order, err := t.client.NewCreateOrderService().
+	// Determine position side based on account mode
+	t.multiAssetsMutex.RLock()
+	useBothSide := t.isMultiAssetsMode
+	t.multiAssetsMutex.RUnlock()
+
+	// Create market sell order
+	orderService := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeSell).
-		PositionSide(futures.PositionSideTypeShort).
 		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		Do(context.Background())
+		Quantity(quantityStr)
 
-	if err != nil {
-		return nil, fmt.Errorf("开空仓失败: %w", err)
+	// Multi-Assets Mode requires PositionSideTypeBoth
+	if useBothSide {
+		orderService = orderService.PositionSide(futures.PositionSideTypeBoth)
+	} else {
+		orderService = orderService.PositionSide(futures.PositionSideTypeShort)
 	}
 
-	log.Printf("✓ 开空仓成功: %s 数量: %s", symbol, quantityStr)
-	log.Printf("  订单ID: %d", order.OrderID)
+	order, err := orderService.Do(context.Background())
+
+	if err != nil {
+		// If -4061 error (position side mismatch), try with BOTH and mark as Multi-Assets Mode
+		if contains(err.Error(), "-4061") || contains(err.Error(), "position side does not match") {
+			log.Printf("  ⚠ Detected Multi-Assets Mode, retrying with PositionSide BOTH...")
+			t.multiAssetsMutex.Lock()
+			t.isMultiAssetsMode = true
+			t.multiAssetsMutex.Unlock()
+			// Retry with BOTH
+			order, err = t.client.NewCreateOrderService().
+				Symbol(symbol).
+				Side(futures.SideTypeSell).
+				PositionSide(futures.PositionSideTypeBoth).
+				Type(futures.OrderTypeMarket).
+				Quantity(quantityStr).
+				Do(context.Background())
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to open short position: %w", err)
+		}
+	}
+
+	log.Printf("✓ Short position opened: %s quantity: %s", symbol, quantityStr)
+	log.Printf("  Order ID: %d", order.OrderID)
 
 	result := make(map[string]interface{})
 	result["orderId"] = order.OrderID
@@ -311,7 +477,7 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 		}
 
 		if quantity == 0 {
-			return nil, fmt.Errorf("没有找到 %s 的多仓", symbol)
+			return nil, fmt.Errorf("no long position found for %s", symbol)
 		}
 	}
 
@@ -321,24 +487,53 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 		return nil, err
 	}
 
-	// 创建市价卖出订单（平多）
-	order, err := t.client.NewCreateOrderService().
+	// Determine position side based on account mode
+	t.multiAssetsMutex.RLock()
+	useBothSide := t.isMultiAssetsMode
+	t.multiAssetsMutex.RUnlock()
+
+	// Create market sell order (close long)
+	orderService := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeSell).
-		PositionSide(futures.PositionSideTypeLong).
 		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		Do(context.Background())
+		Quantity(quantityStr)
 
-	if err != nil {
-		return nil, fmt.Errorf("平多仓失败: %w", err)
+	// Multi-Assets Mode requires PositionSideTypeBoth
+	if useBothSide {
+		orderService = orderService.PositionSide(futures.PositionSideTypeBoth)
+	} else {
+		orderService = orderService.PositionSide(futures.PositionSideTypeLong)
 	}
 
-	log.Printf("✓ 平多仓成功: %s 数量: %s", symbol, quantityStr)
+	order, err := orderService.Do(context.Background())
 
-	// 平仓后取消该币种的所有挂单（止损止盈单）
+	if err != nil {
+		// If -4061 error (position side mismatch), try with BOTH and mark as Multi-Assets Mode
+		if contains(err.Error(), "-4061") || contains(err.Error(), "position side does not match") {
+			log.Printf("  ⚠ Detected Multi-Assets Mode, retrying with PositionSide BOTH...")
+			t.multiAssetsMutex.Lock()
+			t.isMultiAssetsMode = true
+			t.multiAssetsMutex.Unlock()
+			// Retry with BOTH
+			order, err = t.client.NewCreateOrderService().
+				Symbol(symbol).
+				Side(futures.SideTypeSell).
+				PositionSide(futures.PositionSideTypeBoth).
+				Type(futures.OrderTypeMarket).
+				Quantity(quantityStr).
+				Do(context.Background())
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to close long position: %w", err)
+		}
+	}
+
+	log.Printf("✓ Long position closed: %s quantity: %s", symbol, quantityStr)
+
+	// Cancel all pending orders after closing position (stop loss/take profit orders)
 	if err := t.CancelAllOrders(symbol); err != nil {
-		log.Printf("  ⚠ 取消挂单失败: %v", err)
+		log.Printf("  ⚠ Failed to cancel orders: %v", err)
 	}
 
 	result := make(map[string]interface{})
@@ -365,7 +560,7 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 		}
 
 		if quantity == 0 {
-			return nil, fmt.Errorf("没有找到 %s 的空仓", symbol)
+			return nil, fmt.Errorf("no short position found for %s", symbol)
 		}
 	}
 
@@ -375,24 +570,53 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 		return nil, err
 	}
 
-	// 创建市价买入订单（平空）
-	order, err := t.client.NewCreateOrderService().
+	// Determine position side based on account mode
+	t.multiAssetsMutex.RLock()
+	useBothSide := t.isMultiAssetsMode
+	t.multiAssetsMutex.RUnlock()
+
+	// Create market buy order (close short)
+	orderService := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(futures.SideTypeBuy).
-		PositionSide(futures.PositionSideTypeShort).
 		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		Do(context.Background())
+		Quantity(quantityStr)
 
-	if err != nil {
-		return nil, fmt.Errorf("平空仓失败: %w", err)
+	// Multi-Assets Mode requires PositionSideTypeBoth
+	if useBothSide {
+		orderService = orderService.PositionSide(futures.PositionSideTypeBoth)
+	} else {
+		orderService = orderService.PositionSide(futures.PositionSideTypeShort)
 	}
 
-	log.Printf("✓ 平空仓成功: %s 数量: %s", symbol, quantityStr)
+	order, err := orderService.Do(context.Background())
 
-	// 平仓后取消该币种的所有挂单（止损止盈单）
+	if err != nil {
+		// If -4061 error (position side mismatch), try with BOTH and mark as Multi-Assets Mode
+		if contains(err.Error(), "-4061") || contains(err.Error(), "position side does not match") {
+			log.Printf("  ⚠ Detected Multi-Assets Mode, retrying with PositionSide BOTH...")
+			t.multiAssetsMutex.Lock()
+			t.isMultiAssetsMode = true
+			t.multiAssetsMutex.Unlock()
+			// Retry with BOTH
+			order, err = t.client.NewCreateOrderService().
+				Symbol(symbol).
+				Side(futures.SideTypeBuy).
+				PositionSide(futures.PositionSideTypeBoth).
+				Type(futures.OrderTypeMarket).
+				Quantity(quantityStr).
+				Do(context.Background())
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to close short position: %w", err)
+		}
+	}
+
+	log.Printf("✓ Short position closed: %s quantity: %s", symbol, quantityStr)
+
+	// Cancel all pending orders after closing position (stop loss/take profit orders)
 	if err := t.CancelAllOrders(symbol); err != nil {
-		log.Printf("  ⚠ 取消挂单失败: %v", err)
+		log.Printf("  ⚠ Failed to cancel orders: %v", err)
 	}
 
 	result := make(map[string]interface{})
@@ -409,10 +633,10 @@ func (t *FuturesTrader) CancelAllOrders(symbol string) error {
 		Do(context.Background())
 
 	if err != nil {
-		return fmt.Errorf("取消挂单失败: %w", err)
+		return fmt.Errorf("failed to cancel orders: %w", err)
 	}
 
-	log.Printf("  ✓ 已取消 %s 的所有挂单", symbol)
+	log.Printf("  ✓ Cancelled all orders for %s", symbol)
 	return nil
 }
 
@@ -420,11 +644,11 @@ func (t *FuturesTrader) CancelAllOrders(symbol string) error {
 func (t *FuturesTrader) GetMarketPrice(symbol string) (float64, error) {
 	prices, err := t.client.NewListPricesService().Symbol(symbol).Do(context.Background())
 	if err != nil {
-		return 0, fmt.Errorf("获取价格失败: %w", err)
+		return 0, fmt.Errorf("failed to get price: %w", err)
 	}
 
 	if len(prices) == 0 {
-		return 0, fmt.Errorf("未找到价格")
+		return 0, fmt.Errorf("price not found")
 	}
 
 	price, err := strconv.ParseFloat(prices[0].Price, 64)
@@ -456,7 +680,16 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		posSide = futures.PositionSideTypeShort
 	}
 
-	// 格式化数量
+	// Check if Multi-Assets Mode - use BOTH for position side
+	t.multiAssetsMutex.RLock()
+	useBothSide := t.isMultiAssetsMode
+	t.multiAssetsMutex.RUnlock()
+
+	if useBothSide {
+		posSide = futures.PositionSideTypeBoth
+	}
+
+	// Format quantity
 	quantityStr, err := t.FormatQuantity(symbol, quantity)
 	if err != nil {
 		return err
@@ -474,10 +707,12 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		Do(context.Background())
 
 	if err != nil {
-		return fmt.Errorf("设置止损失败: %w", err)
+		// Make it a warning, not a fatal error - position is still open
+		log.Printf("  ⚠ Failed to set stop loss: %v (position remains open)", err)
+		return nil // Don't fail the entire trade
 	}
 
-	log.Printf("  止损价设置: %.4f", stopPrice)
+	log.Printf("  ✓ Stop loss set: %.4f", stopPrice)
 	return nil
 }
 
@@ -494,7 +729,16 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		posSide = futures.PositionSideTypeShort
 	}
 
-	// 格式化数量
+	// Check if Multi-Assets Mode - use BOTH for position side
+	t.multiAssetsMutex.RLock()
+	useBothSide := t.isMultiAssetsMode
+	t.multiAssetsMutex.RUnlock()
+
+	if useBothSide {
+		posSide = futures.PositionSideTypeBoth
+	}
+
+	// Format quantity
 	quantityStr, err := t.FormatQuantity(symbol, quantity)
 	if err != nil {
 		return err
@@ -512,10 +756,12 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		Do(context.Background())
 
 	if err != nil {
-		return fmt.Errorf("设置止盈失败: %w", err)
+		// Make it a warning, not a fatal error - position is still open
+		log.Printf("  ⚠ Failed to set take profit: %v (position remains open)", err)
+		return nil // Don't fail the entire trade
 	}
 
-	log.Printf("  止盈价设置: %.4f", takeProfitPrice)
+	log.Printf("  ✓ Take profit set: %.4f", takeProfitPrice)
 	return nil
 }
 

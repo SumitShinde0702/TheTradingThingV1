@@ -29,9 +29,26 @@ function getModelForLogo(trader: { trader_name: string; ai_model: string }): str
   return trader.ai_model;
 }
 
+// Helper to determine trader type
+function getTraderType(traderId: string, traderName: string): 'paper' | 'real' | 'etf' {
+  if (traderId.includes('_binance_real') || traderId.includes('_real') || traderName.includes('(Binance Real)')) {
+    return 'real';
+  }
+  if (traderId.includes('llama_scalper') || traderId.includes('llama_analyzer') || 
+      traderId.includes('gpt20b_fast') || traderId.includes('qwen_single') || 
+      traderId.includes('openai_multi') || traderId.includes('qwen_multi')) {
+    // Check if it's from ETF (not single-agent)
+    if (!traderId.includes('_single')) {
+      return 'etf';
+    }
+  }
+  return 'paper';
+}
+
 export function CompetitionPage() {
   const { language } = useLanguage();
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('24h');
+  const [filter, setFilter] = useState<'all' | 'paper' | 'real' | 'etf'>('all');
   const [chartStats, setChartStats] = useState<{
     displayDataLength: number;
     filteredDataLength: number;
@@ -74,13 +91,77 @@ export function CompetitionPage() {
     );
   }
 
+  // Filter traders based on selected filter
+  let filteredTraders = competition.traders;
+  if (filter !== 'all') {
+    filteredTraders = competition.traders.filter(trader => {
+      const type = getTraderType(trader.trader_id, trader.trader_name);
+      return type === filter;
+    });
+  }
+
   // 按收益率排序
-  const sortedTraders = [...competition.traders].sort(
+  const sortedTraders = [...filteredTraders].sort(
     (a, b) => b.total_pnl_pct - a.total_pnl_pct
   );
 
+  // Count traders by type
+  const traderCounts = {
+    all: competition.traders.length,
+    paper: competition.traders.filter(t => getTraderType(t.trader_id, t.trader_name) === 'paper').length,
+    real: competition.traders.filter(t => getTraderType(t.trader_id, t.trader_name) === 'real').length,
+    etf: competition.traders.filter(t => getTraderType(t.trader_id, t.trader_name) === 'etf').length,
+  };
+
   return (
     <div className="space-y-5 animate-fade-in">
+      {/* Filter Tabs */}
+      <div className="binance-card p-3 sm:p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold" style={{ color: '#848E9C' }}>Filter:</span>
+          <button
+            onClick={() => setFilter('all')}
+            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
+            style={filter === 'all'
+              ? { background: '#F0B90B', color: '#000' }
+              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
+            }
+          >
+            All ({traderCounts.all})
+          </button>
+          <button
+            onClick={() => setFilter('paper')}
+            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
+            style={filter === 'paper'
+              ? { background: '#F0B90B', color: '#000' }
+              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
+            }
+          >
+            📊 Paper ({traderCounts.paper})
+          </button>
+          <button
+            onClick={() => setFilter('etf')}
+            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
+            style={filter === 'etf'
+              ? { background: '#F0B90B', color: '#000' }
+              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
+            }
+          >
+            📈 ETF Portfolio ({traderCounts.etf})
+          </button>
+          <button
+            onClick={() => setFilter('real')}
+            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
+            style={filter === 'real'
+              ? { background: 'linear-gradient(135deg, #F6465D 0%, #FF6B6B 100%)', color: '#FFF', border: '1px solid #F6465D' }
+              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
+            }
+          >
+            💰 Real Trading ({traderCounts.real})
+          </button>
+        </div>
+      </div>
+
       {/* Left/Right Split: Performance Chart + Leaderboard */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-5">
         {/* Left: Performance Comparison Chart - Takes more space */}
@@ -89,6 +170,11 @@ export function CompetitionPage() {
             <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
               <h2 className="text-base sm:text-lg font-bold" style={{ color: '#EAECEF' }}>
                 {t('performanceComparison', language)}
+                {filter !== 'all' && (
+                  <span className="ml-2 text-xs font-normal" style={{ color: '#848E9C' }}>
+                    ({filter === 'real' ? 'Real Trading' : filter === 'etf' ? 'ETF Portfolio' : 'Paper Trading'})
+                  </span>
+                )}
               </h2>
               <span className="text-xs" style={{ color: '#848E9C' }}>
                 ({Intl.DateTimeFormat().resolvedOptions().timeZone})
@@ -114,11 +200,18 @@ export function CompetitionPage() {
             </div>
           </div>
           <div className="space-y-3">
-            {sortedTraders.map((trader, index) => {
+            {sortedTraders.length === 0 ? (
+              <div className="text-center py-8 text-sm" style={{ color: '#848E9C' }}>
+                No traders found for selected filter
+              </div>
+            ) : sortedTraders.map((trader, index) => {
               const isLeader = index === 0;
               const traderColor = getTraderColor(sortedTraders, trader.trader_id);
               const pnlValue = trader.total_pnl ?? 0;
               const pnlPercent = trader.total_pnl_pct ?? 0;
+              const traderType = getTraderType(trader.trader_id, trader.trader_name);
+              const isReal = traderType === 'real';
+              const isETF = traderType === 'etf';
 
               // Format numbers with commas
               const formatNumber = (num: number) => {
@@ -157,8 +250,22 @@ export function CompetitionPage() {
                       </div>
                       <ModelLogo model={getModelForLogo(trader)} size={32} color={traderColor} />
                       <div className="min-w-0 flex-1">
-                        <div className="font-bold text-sm truncate" style={{ color: '#EAECEF' }}>
-                          {cleanTraderName(trader.trader_name)}
+                        <div className="flex items-center gap-2">
+                          <div className="font-bold text-sm truncate" style={{ color: '#EAECEF' }}>
+                            {cleanTraderName(trader.trader_name)}
+                          </div>
+                          {isReal && (
+                            <span className="text-xs px-1.5 py-0.5 rounded font-semibold flex-shrink-0" 
+                              style={{ background: 'rgba(246, 70, 93, 0.15)', color: '#F6465D', border: '1px solid rgba(246, 70, 93, 0.3)' }}>
+                              REAL
+                            </span>
+                          )}
+                          {isETF && !isReal && (
+                            <span className="text-xs px-1.5 py-0.5 rounded font-semibold flex-shrink-0" 
+                              style={{ background: 'rgba(14, 203, 129, 0.15)', color: '#0ECB81', border: '1px solid rgba(14, 203, 129, 0.3)' }}>
+                              ETF
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

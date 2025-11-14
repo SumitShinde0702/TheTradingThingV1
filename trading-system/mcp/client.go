@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -29,6 +30,8 @@ type Client struct {
 	Model      string
 	Timeout    time.Duration
 	UseFullURL bool // 是否使用完整URL（不添加/chat/completions）
+	transport  *http.Transport // 可复用的HTTP传输层，用于连接池
+	httpClient *http.Client     // 可复用的HTTP客户端
 }
 
 func New() *Client {
@@ -70,7 +73,12 @@ func (cfg *Client) SetGroqAPIKey(apiKey string, model string) {
 	} else {
 		cfg.Model = model // 支持 OpenAI 和 Qwen 模型，如: "openai/gpt-4o", "qwen/qwen2.5-72b-instruct"
 	}
-	cfg.Timeout = 120 * time.Second
+	// Increase timeout for larger models (70B models are slower)
+	if strings.Contains(model, "70b") || strings.Contains(model, "70B") {
+		cfg.Timeout = 180 * time.Second // 3 minutes for 70B models
+	} else {
+		cfg.Timeout = 120 * time.Second // 2 minutes for smaller models
+	}
 }
 
 // SetCustomAPI 设置自定义OpenAI兼容API
@@ -105,8 +113,8 @@ func (cfg *Client) CallWithMessages(systemPrompt, userPrompt string) (string, er
 		return "", fmt.Errorf("AI API密钥未设置，请先调用 SetGroqAPIKey(), SetDeepSeekAPIKey() 或 SetQwenAPIKey()")
 	}
 
-	// 重试配置
-	maxRetries := 3
+	// 重试配置 - 增加重试次数以应对网络不稳定
+	maxRetries := 5
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -128,9 +136,22 @@ func (cfg *Client) CallWithMessages(systemPrompt, userPrompt string) (string, er
 			return "", err
 		}
 
-		// 重试前等待
+		// 重试前等待 - 使用指数退避，但增加初始延迟 (5s, 10s, 20s, 30s)
+		// 给Groq服务器更多时间恢复
 		if attempt < maxRetries {
-			waitTime := time.Duration(attempt) * 2 * time.Second
+			var waitTime time.Duration
+			switch attempt {
+			case 1:
+				waitTime = 5 * time.Second // 第一次重试等待5秒
+			case 2:
+				waitTime = 10 * time.Second // 第二次重试等待10秒
+			case 3:
+				waitTime = 20 * time.Second // 第三次重试等待20秒
+			case 4:
+				waitTime = 30 * time.Second // 第四次重试等待30秒
+			default:
+				waitTime = 30 * time.Second
+			}
 			fmt.Printf("⏳ 等待%v后重试...\n", waitTime)
 			time.Sleep(waitTime)
 		}
@@ -205,9 +226,28 @@ func (cfg *Client) callOnce(systemPrompt, userPrompt string) (string, error) {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
 	}
 
-	// 发送请求
-	client := &http.Client{Timeout: cfg.Timeout}
-	resp, err := client.Do(req)
+	// 发送请求 - 使用连接池和KeepAlive以提高稳定性
+	// 初始化可复用的transport和client（如果还没有）
+	if cfg.transport == nil {
+		cfg.transport = &http.Transport{
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 2,
+			IdleConnTimeout:     90 * time.Second,
+			DisableKeepAlives:   false, // 启用KeepAlive以复用连接
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+		cfg.httpClient = &http.Client{
+			Timeout:   cfg.Timeout,
+			Transport: cfg.transport,
+		}
+	}
+	resp, err := cfg.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("发送请求失败: %w", err)
 	}
@@ -252,8 +292,12 @@ func isRetryableError(err error) bool {
 		"timeout",
 		"connection reset",
 		"connection refused",
+		"forcibly closed",
+		"wsarecv",
 		"temporary failure",
 		"no such host",
+		"broken pipe",
+		"network is unreachable",
 	}
 	for _, retryable := range retryableErrors {
 		if strings.Contains(errStr, retryable) {

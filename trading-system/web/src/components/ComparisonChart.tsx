@@ -287,13 +287,17 @@ export function ComparisonChart({ traders, timePeriod = '24h', onStatsUpdate }: 
   // 生成唯一的key，当traders变化时会触发重新请求
   const tradersKey = traders.map(t => t.trader_id).sort().join(',');
 
-  const { data: allTraderHistories, isLoading } = useSWR(
+  const { data: allTraderHistories, isLoading, error } = useSWR(
     traders.length > 0 ? `all-equity-histories-${tradersKey}` : null,
     async () => {
       // 并发请求所有trader的历史数据
       // 后端会自动使用最早的可用记录作为基线（如果没有cycle #1）
+      // Use Promise.allSettled to handle partial failures gracefully
       const promises = traders.map(trader =>
-        api.getEquityHistory(trader.trader_id)
+        api.getEquityHistory(trader.trader_id).catch(err => {
+          console.warn(`Failed to fetch equity history for ${trader.trader_id}:`, err);
+          return []; // Return empty array on error instead of failing entire request
+        })
       );
       return Promise.all(promises);
     },
@@ -301,6 +305,9 @@ export function ComparisonChart({ traders, timePeriod = '24h', onStatsUpdate }: 
       refreshInterval: 3000, // 3秒刷新 - 更快显示最新P&L
       revalidateOnFocus: true, // 窗口聚焦时立即刷新
       dedupingInterval: 1000, // 1秒去重 - 减少缓存时间
+      onError: (err) => {
+        console.warn('Error fetching equity histories:', err);
+      },
     }
   );
 
@@ -314,9 +321,10 @@ export function ComparisonChart({ traders, timePeriod = '24h', onStatsUpdate }: 
 
   // 使用useMemo自动处理数据合并，直接使用data对象作为依赖
   const combinedData = useMemo(() => {
-    // 等待所有数据加载完成
-    const allLoaded = traderHistories.every((h) => h.data);
-    if (!allLoaded) return [];
+    // Show chart even if some traders don't have data yet (partial loading)
+    // Only require at least one trader to have data
+    const hasAnyData = traderHistories.some((h) => h.data && h.data.length > 0);
+    if (!hasAnyData) return [];
 
     // 新方案：按时间戳分组，不再依赖 cycle_number（因为后端会重置）
     // Step 1: Collect all timestamps from all traders and normalize them
@@ -885,7 +893,11 @@ export function ComparisonChart({ traders, timePeriod = '24h', onStatsUpdate }: 
     }
   }, [displayData.length, filteredData.length, currentGap, lastUpdatedLabel, onStatsUpdate]);
 
-  if (isLoading) {
+  // Show chart even while loading if we have some data
+  // Only show loading spinner if we have NO data at all
+  const showLoadingSpinner = isLoading && (!allTraderHistories || combinedData.length === 0);
+  
+  if (showLoadingSpinner) {
     return (
       <div>
         <div

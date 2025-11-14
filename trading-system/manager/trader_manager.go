@@ -190,17 +190,75 @@ func (tm *TraderManager) GetComparisonData() (map[string]interface{}, error) {
 	comparison := make(map[string]interface{})
 	traders := make([]map[string]interface{}, 0, len(tm.traders))
 
+	if len(tm.traders) == 0 {
+		comparison["traders"] = traders
+		comparison["count"] = 0
+		return comparison, nil
+	}
+
+	// First pass: collect all initial balances and detect shared accounts
+	initialBalances := make(map[string]float64)
+	totalInitialBalance := 0.0
+	
+	for _, t := range tm.traders {
+		status := t.GetStatus()
+		initialBalance := 0.0
+		if ib, ok := status["initial_balance"].(float64); ok && ib > 0 {
+			initialBalance = ib
+		}
+		initialBalances[t.GetID()] = initialBalance
+		totalInitialBalance += initialBalance
+		log.Printf("📊 [GetComparisonData] Trader %s: initial_balance=%.2f", t.GetID(), initialBalance)
+	}
+	log.Printf("📊 [GetComparisonData] Total initial balance: %.2f", totalInitialBalance)
+
+	// Get first trader's account to check if all share same balance
+	var sharedAccountEquity float64 = 0.0
+	hasSharedAccount := false
+	
+	if len(tm.traders) > 1 {
+		// Get first trader to check
+		var firstTrader *trader.AutoTrader
+		for _, t := range tm.traders {
+			firstTrader = t
+			break
+		}
+		
+		firstAccount, err := firstTrader.GetAccountInfo()
+		if err == nil {
+			firstEquity := firstAccount["total_equity"].(float64)
+			// Check if all traders have same equity (indicating shared account)
+			allSame := true
+			for _, t := range tm.traders {
+				acc, err := t.GetAccountInfo()
+				if err != nil {
+					allSame = false
+					break
+				}
+				accEquity := acc["total_equity"].(float64)
+				// Allow small floating point differences
+				if accEquity != firstEquity && (accEquity-firstEquity > 0.01 || firstEquity-accEquity > 0.01) {
+					allSame = false
+					break
+				}
+			}
+			if allSame {
+				hasSharedAccount = true
+				sharedAccountEquity = firstEquity
+				log.Printf("🔍 [GetComparisonData] Detected shared account: %d traders sharing %.2f USDT equity", len(tm.traders), sharedAccountEquity)
+			}
+		}
+	}
+
 	for _, t := range tm.traders {
 		account, err := t.GetAccountInfo()
 		status := t.GetStatus()
 		
+		initialBalance := initialBalances[t.GetID()]
+
 		// If account info fails (e.g., invalid API keys), use demo data
 		if err != nil {
 			log.Printf("⚠️  [%s] Failed to get account info, using demo data: %v", t.GetName(), err)
-			initialBalance := 1000.0
-			if ib, ok := status["initial_balance"].(float64); ok && ib > 0 {
-				initialBalance = ib
-			}
 			
 			traders = append(traders, map[string]interface{}{
 				"trader_id":       t.GetID(),
@@ -217,15 +275,61 @@ func (tm *TraderManager) GetComparisonData() (map[string]interface{}, error) {
 			continue
 		}
 
+		var equity, pnl, pnlPct float64
+		var positionCount int
+		var marginUsedPct float64
+
+		// If multiple traders share same account, split proportionally
+		if hasSharedAccount && totalInitialBalance > 0 {
+			// Calculate this trader's proportional share
+			proportion := initialBalance / totalInitialBalance
+			equity = sharedAccountEquity * proportion
+			pnl = equity - initialBalance
+			if initialBalance > 0 {
+				pnlPct = (pnl / initialBalance) * 100
+			}
+			log.Printf("📊 [GetComparisonData] %s: initial=%.2f, proportion=%.4f, equity=%.2f, pnl=%.2f, pnlPct=%.2f%%",
+				t.GetID(), initialBalance, proportion, equity, pnl, pnlPct)
+			
+			// For positions, we can't split them, so show all positions for each trader
+			// (This is a limitation - we can't track which positions belong to which trader)
+			if pc, ok := account["position_count"].(int); ok {
+				positionCount = pc
+			} else if pc, ok := account["position_count"].(float64); ok {
+				positionCount = int(pc)
+			}
+			
+			if mup, ok := account["margin_used_pct"].(float64); ok {
+				marginUsedPct = mup
+			}
+		} else {
+			// Normal case: each trader has own account
+			equity = account["total_equity"].(float64)
+			pnl = account["total_pnl"].(float64)
+			pnlPct = account["total_pnl_pct"].(float64)
+			
+			if pc, ok := account["position_count"].(int); ok {
+				positionCount = pc
+			} else if pc, ok := account["position_count"].(float64); ok {
+				positionCount = int(pc)
+			} else {
+				positionCount = 0
+			}
+			
+			if mup, ok := account["margin_used_pct"].(float64); ok {
+				marginUsedPct = mup
+			}
+		}
+
 		traders = append(traders, map[string]interface{}{
 			"trader_id":       t.GetID(),
 			"trader_name":     t.GetName(),
 			"ai_model":        t.GetAIModel(),
-			"total_equity":    account["total_equity"],
-			"total_pnl":       account["total_pnl"],
-			"total_pnl_pct":   account["total_pnl_pct"],
-			"position_count":  account["position_count"],
-			"margin_used_pct": account["margin_used_pct"],
+			"total_equity":    equity,
+			"total_pnl":       pnl,
+			"total_pnl_pct":   pnlPct,
+			"position_count":  positionCount,
+			"margin_used_pct": marginUsedPct,
 			"call_count":      status["call_count"],
 			"is_running":      status["is_running"],
 		})

@@ -483,8 +483,15 @@ func (at *AutoTrader) runCycle() error {
 		record.CandidateCoins = append(record.CandidateCoins, coin.Symbol)
 	}
 
-	log.Printf("📊 Account equity: %.2f USDT | Available: %.2f USDT | Positions: %d",
-		ctx.Account.TotalEquity, ctx.Account.AvailableBalance, ctx.Account.PositionCount)
+	// Log account status - these are ACTUAL Binance account values (same for both traders on shared account)
+	// Note: For shared accounts, frontend will show proportional values per trader, but logs show actual account values
+	unrealizedPnL := ctx.Account.TotalEquity - ctx.Account.WalletBalance
+	log.Printf("📊 Margin Balance (Equity): %.2f USDT | Wallet Balance: %.2f USDT | Available: %.2f USDT | Unrealized P&L: %.2f USDT | Positions: %d",
+		ctx.Account.TotalEquity, ctx.Account.WalletBalance, ctx.Account.AvailableBalance, unrealizedPnL, ctx.Account.PositionCount)
+	if ctx.Account.AvailableBalance < 0.01 {
+		log.Printf("⚠️  Available balance is $0 - all margin is used by open positions. This is normal when positions are open.")
+	}
+	log.Printf("💡 Note: These are ACTUAL Binance account values (shared account). Frontend shows proportional values per trader.")
 
 	// 4. Call AI to get full decision (multi-agent or single-agent)
 	log.Println("🤖 Requesting AI analysis and decision...")
@@ -628,6 +635,44 @@ func (at *AutoTrader) runCycle() error {
 	}
 	log.Println()
 
+	// 7.5. Validate: Limit new positions to prevent margin exhaustion
+	currentPositions, _ := at.trader.GetPositions()
+	currentPositionCount := len(currentPositions)
+
+	// Count how many new positions AI wants to open
+	newPositionCount := 0
+	for _, d := range sortedDecisions {
+		if d.Action == "open_long" || d.Action == "open_short" {
+			newPositionCount++
+		}
+	}
+
+	// Maximum 6 total positions (hard limit) – small position sizing keeps margin safe
+	maxPositions := 6
+	availableSlots := maxPositions - currentPositionCount
+
+	if newPositionCount > availableSlots {
+		log.Printf("⚠️  AI tried to open %d new positions, but only %d slots available (current: %d, max: %d)",
+			newPositionCount, availableSlots, currentPositionCount, maxPositions)
+		log.Printf("⚠️  Rejecting excess position openings. Only opening first %d positions.", availableSlots)
+
+		// Filter out excess open positions
+		var filteredDecisions []decisionPkg.Decision
+		openedCount := 0
+		for _, d := range sortedDecisions {
+			if (d.Action == "open_long" || d.Action == "open_short") && openedCount >= availableSlots {
+				log.Printf("  ⏭ Skipping %s %s (would exceed position limit)", d.Symbol, d.Action)
+				record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("⏭ Skipped %s %s (position limit reached)", d.Symbol, d.Action))
+				continue
+			}
+			if d.Action == "open_long" || d.Action == "open_short" {
+				openedCount++
+			}
+			filteredDecisions = append(filteredDecisions, d)
+		}
+		sortedDecisions = filteredDecisions
+	}
+
 	// Execute decisions and record results
 	for _, d := range sortedDecisions {
 		actionRecord := logger.DecisionAction{
@@ -682,7 +727,7 @@ func (at *AutoTrader) runCycle() error {
 			totalEquity, availableBalance, totalUnrealizedProfit)
 	}
 
-	currentPositions, err := at.trader.GetPositions()
+	currentPositions, err = at.trader.GetPositions()
 	if err == nil {
 		// Clear old position snapshots and update with current positions
 		record.Positions = []logger.PositionSnapshot{}
@@ -880,6 +925,7 @@ func (at *AutoTrader) buildTradingContext() (*decisionPkg.Context, error) {
 		AltcoinLeverage: at.config.AltcoinLeverage, // Use configured leverage multiplier
 		Account: decisionPkg.AccountInfo{
 			TotalEquity:      totalEquity,
+			WalletBalance:    totalWalletBalance, // Actual wallet balance from API
 			AvailableBalance: availableBalance,
 			TotalPnL:         totalPnL,
 			TotalPnLPct:      totalPnLPct,
@@ -1024,6 +1070,25 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision,
 func (at *AutoTrader) executeCloseLongWithRecord(decision *decisionPkg.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 Closing long position: %s", decision.Symbol)
 
+	// Check position P&L before closing - don't close losing positions
+	positions, err := at.trader.GetPositions()
+	if err == nil {
+		for _, pos := range positions {
+			posSymbol, _ := pos["symbol"].(string)
+			posSide, _ := pos["side"].(string)
+			if posSymbol == decision.Symbol && strings.ToLower(posSide) == "long" {
+				unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
+				if unrealizedPnl < 0 {
+					// Position is losing money - reject close unless stop loss is hit
+					log.Printf("  ⚠️ Position %s LONG has negative P&L (%.2f USDT) - holding until profitable or stop loss hit", decision.Symbol, unrealizedPnl)
+					return fmt.Errorf("position is losing money (P&L: %.2f USDT) - holding until profitable. Only close if stop loss is hit or position becomes profitable", unrealizedPnl)
+				}
+				log.Printf("  ✓ Position %s LONG is profitable (P&L: +%.2f USDT) - closing", decision.Symbol, unrealizedPnl)
+				break
+			}
+		}
+	}
+
 	// Get current price
 	marketData, err := market.Get(decision.Symbol)
 	if err != nil {
@@ -1049,6 +1114,25 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decisionPkg.Decision,
 // executeCloseShortWithRecord executes closing short position and records detailed information
 func (at *AutoTrader) executeCloseShortWithRecord(decision *decisionPkg.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 Closing short position: %s", decision.Symbol)
+
+	// Check position P&L before closing - don't close losing positions
+	positions, err := at.trader.GetPositions()
+	if err == nil {
+		for _, pos := range positions {
+			posSymbol, _ := pos["symbol"].(string)
+			posSide, _ := pos["side"].(string)
+			if posSymbol == decision.Symbol && strings.ToLower(posSide) == "short" {
+				unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
+				if unrealizedPnl < 0 {
+					// Position is losing money - reject close unless stop loss is hit
+					log.Printf("  ⚠️ Position %s SHORT has negative P&L (%.2f USDT) - holding until profitable or stop loss hit", decision.Symbol, unrealizedPnl)
+					return fmt.Errorf("position is losing money (P&L: %.2f USDT) - holding until profitable. Only close if stop loss is hit or position becomes profitable", unrealizedPnl)
+				}
+				log.Printf("  ✓ Position %s SHORT is profitable (P&L: +%.2f USDT) - closing", decision.Symbol, unrealizedPnl)
+				break
+			}
+		}
+	}
 
 	// Get current price
 	marketData, err := market.Get(decision.Symbol)

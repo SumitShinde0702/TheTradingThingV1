@@ -1,0 +1,78 @@
+{
+    "traders": [
+        {
+            "id": "llama_scalper_binance_real",
+            "name": "Llama Scalper (Binance Real)",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "binance",
+            "binance_api_key": "10dhXhOO12vlwKNZaPoUm6SOMUqrLxucS97zaahd9MWbMuyCBZVDp6W6QpGDtpZA",
+            "binance_secret_key": "2uboI4eNrrNjCHfVDtvz104W6DnoLSbGee3BC7Ltm64fGFQ24B3kiAbL8CkfPNaa",
+            "groq_key": "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",
+            "groq_model": "llama-3.1-8b-instant",
+            "initial_balance": 63.00,
+            "scan_interval_minutes": 15
+        },
+        {
+            "id": "llama_analyzer_binance_real",
+            "name": "Llama 3.3 70B Analyzer (Binance Real)",
+            "enabled": true,
+            "ai_model": "groq",
+            "exchange": "binance",
+            "binance_api_key": "10dhXhOO12vlwKNZaPoUm6SOMUqrLxucS97zaahd9MWbMuyCBZVDp6W6QpGDtpZA",
+            "binance_secret_key": "2uboI4eNrrNjCHfVDtvz104W6DnoLSbGee3BC7Ltm64fGFQ24B3kiAbL8CkfPNaa",
+            "groq_key": "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",
+            "groq_model": "llama-3.3-70b-versatile",
+            "initial_balance": 63.00,
+            "scan_interval_minutes": 20
+        },
+        {
+            "id": "deepseek_trader_binance_real",
+            "name": "DeepSeek Strategist (Binance Real)",
+            "enabled": true,
+            "ai_model": "deepseek",
+            "exchange": "binance",
+            "binance_api_key": "10dhXhOO12vlwKNZaPoUm6SOMUqrLxucS97zaahd9MWbMuyCBZVDp6W6QpGDtpZA",
+            "binance_secret_key": "2uboI4eNrrNjCHfVDtvz104W6DnoLSbGee3BC7Ltm64fGFQ24B3kiAbL8CkfPNaa",
+            "deepseek_key": "sk-e2b7b99c7eef4777b2380c9dd334b2cf",
+            "initial_balance": 37.00,
+            "scan_interval_minutes": 10
+        }
+    ],
+    "leverage": {
+        "btc_eth_leverage": 7,
+        "altcoin_leverage": 7
+    },
+    "use_default_coins": true,
+    "default_coins": [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+        "DOGEUSDT",
+        "ADAUSDT",
+        "HYPEUSDT"
+    ],
+    "coin_pool_api_url": "",
+    "oi_top_api_url": "",
+    "api_server_port": 8083,
+    "max_daily_loss": 5.0,
+    "max_drawdown": 15.0,
+    "stop_trading_minutes": 60,
+    "auto_take_profit_pct": 0,
+    "use_supabase": false,
+    "supabase_url": "",
+    "supabase_key": "",
+    "supabase_database_url": "",
+    "supabase_schema": "public",
+    "multi_agent": {
+        "enabled": false,
+        "consensus_mode": "best",
+        "fast_first": true,
+        "min_agents": 2,
+        "max_wait_time": 15,
+        "agents": []
+    }
+}
+

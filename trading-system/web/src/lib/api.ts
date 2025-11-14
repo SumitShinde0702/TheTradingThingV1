@@ -16,15 +16,32 @@ import {
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const API_BASE_MULTI = import.meta.env.VITE_API_URL_MULTI || 'http://localhost:8081/api';
 const API_BASE_ETF = import.meta.env.VITE_API_URL_ETF || 'http://localhost:8082/api';
+const API_BASE_BINANCE = import.meta.env.VITE_API_URL_BINANCE || 'http://localhost:8083/api';
 const USE_SUPABASE = import.meta.env.VITE_USE_SUPABASE !== 'false'; // Default to true if not set
 
 // Helper to determine which backend to use based on trader ID
 const getApiBase = (traderId?: string): string => {
-  // If trader ID contains "_multi", use multi-agent backend (port 8081)
-  if (traderId && traderId.includes('_multi')) {
+  if (!traderId) return API_BASE;
+  
+  // Priority 1: Real trading (check first to avoid conflicts)
+  if (traderId.includes('_binance_real') || traderId.includes('_real')) {
+    return API_BASE_BINANCE;
+  }
+  
+  // Priority 2: Multi-agent backend
+  if (traderId.includes('_multi')) {
     return API_BASE_MULTI;
   }
-  // Otherwise use default backend (port 8080)
+  
+  // Priority 3: ETF portfolio agents (but not if they're in single-agent config)
+  // Check for ETF-specific IDs (from config-etf-portfolio-rebalanced.json)
+  const etfAgents = ['llama_scalper', 'llama_analyzer', 'gpt20b_fast', 'qwen_single', 'openai_multi', 'qwen_multi'];
+  // Only route to ETF if it's NOT a single-agent trader (which would have _single suffix)
+  if (etfAgents.some(agent => traderId === agent || traderId.startsWith(agent + '_')) && !traderId.includes('_single')) {
+    return API_BASE_ETF;
+  }
+  
+  // Priority 4: Default backend (port 8080 - single-agent paper trading)
   return API_BASE;
 };
 
@@ -47,16 +64,18 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
 export const api = {
   // 竞赛相关接口 - combines data from both backends
   async getCompetition(): Promise<CompetitionData> {
-    // Fetch from both backends
+    // Fetch from all backends (paper trading + real trading)
     const promises = [
-      fetch(`${API_BASE}/competition`).catch(() => null), // Single-agent
-      fetch(`${API_BASE_MULTI}/competition`).catch(() => null), // Multi-agent
+      fetch(`${API_BASE}/competition`).catch(() => null), // Single-agent (Paper - 8080)
+      fetch(`${API_BASE_MULTI}/competition`).catch(() => null), // Multi-agent (Paper - 8081)
+      fetch(`${API_BASE_ETF}/competition`).catch(() => null), // ETF Portfolio (Paper - 8082)
+      fetch(`${API_BASE_BINANCE}/competition`).catch(() => null), // Binance Real (8083)
     ];
     
     const results = await Promise.all(promises);
     const allTraders: any[] = [];
     
-    // Combine traders from both backends
+    // Combine traders from all backends
     for (const res of results) {
       if (res && res.ok) {
         const data = await res.json();
@@ -109,16 +128,18 @@ export const api = {
   },
 
   async getTraders(): Promise<TraderInfo[]> {
-    // Fetch from both backends and combine
+    // Fetch from all backends and combine
     const promises = [
-      fetch(`${API_BASE}/traders`).catch(() => null), // Single-agent (port 8080)
-      fetch(`${API_BASE_MULTI}/traders`).catch(() => null), // Multi-agent (port 8081)
+      fetch(`${API_BASE}/traders`).catch(() => null), // Single-agent (Paper - 8080)
+      fetch(`${API_BASE_MULTI}/traders`).catch(() => null), // Multi-agent (Paper - 8081)
+      fetch(`${API_BASE_ETF}/traders`).catch(() => null), // ETF Portfolio (Paper - 8082)
+      fetch(`${API_BASE_BINANCE}/traders`).catch(() => null), // Binance Real (8083)
     ];
     
     const results = await Promise.all(promises);
     const allTraders: TraderInfo[] = [];
     
-    // Combine traders from both backends
+    // Combine traders from all backends
     for (const res of results) {
       if (res && res.ok) {
         const traders = await res.json();

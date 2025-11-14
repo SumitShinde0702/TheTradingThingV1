@@ -166,8 +166,59 @@ func (s *Server) handlePortfolio(c *gin.Context) {
 		return
 	}
 
-	totalEquity := 0.0
+	// First pass: collect all initial balances and detect shared accounts
+	initialBalances := make(map[string]float64)
 	totalInitialBalance := 0.0
+	
+	for _, t := range traders {
+		status := t.GetStatus()
+		initialBalance := 0.0
+		if ib, ok := status["initial_balance"].(float64); ok && ib > 0 {
+			initialBalance = ib
+		}
+		initialBalances[t.GetID()] = initialBalance
+		totalInitialBalance += initialBalance
+	}
+
+	// Get first trader's account to check if all share same balance
+	var sharedAccountEquity float64 = 0.0
+	hasSharedAccount := false
+	
+	if len(traders) > 1 {
+		// Get first trader to check
+		var firstTrader *trader.AutoTrader
+		for _, t := range traders {
+			firstTrader = t
+			break
+		}
+		
+		firstAccount, err := firstTrader.GetAccountInfo()
+		if err == nil {
+			firstEquity := firstAccount["total_equity"].(float64)
+			// Check if all traders have same equity (indicating shared account)
+			allSame := true
+			for _, t := range traders {
+				acc, err := t.GetAccountInfo()
+				if err != nil {
+					allSame = false
+					break
+				}
+				accEquity := acc["total_equity"].(float64)
+				// Allow small floating point differences
+				if accEquity != firstEquity && (accEquity-firstEquity > 0.01 || firstEquity-accEquity > 0.01) {
+					allSame = false
+					break
+				}
+			}
+			if allSame {
+				hasSharedAccount = true
+				sharedAccountEquity = firstEquity
+				log.Printf("🔍 Detected shared account: %d traders sharing %.2f USDT equity", len(traders), sharedAccountEquity)
+			}
+		}
+	}
+
+	totalEquity := 0.0
 	totalPositions := 0
 	agents := make([]map[string]interface{}, 0, len(traders))
 	allRunning := true
@@ -176,10 +227,7 @@ func (s *Server) handlePortfolio(c *gin.Context) {
 		account, err := t.GetAccountInfo()
 		status := t.GetStatus()
 
-		initialBalance := 0.0
-		if ib, ok := status["initial_balance"].(float64); ok && ib > 0 {
-			initialBalance = ib
-		}
+		initialBalance := initialBalances[t.GetID()]
 
 		if err != nil {
 			log.Printf("⚠️  [%s] Failed to get account info: %v", t.GetName(), err)
@@ -193,7 +241,7 @@ func (s *Server) handlePortfolio(c *gin.Context) {
 				"trader_name":     t.GetName(),
 				"ai_model":        t.GetAIModel(),
 				"equity":          equity,
-				"initial_balance": initialBalance,
+				"initial_balance":  initialBalance,
 				"pnl":             0.0,
 				"pnl_pct":         0.0,
 				"position_count":  0,
@@ -206,22 +254,42 @@ func (s *Server) handlePortfolio(c *gin.Context) {
 			continue
 		}
 
-		equity := account["total_equity"].(float64)
-		pnl := account["total_pnl"].(float64)
-		pnlPct := account["total_pnl_pct"].(float64)
-
-		// Handle position_count as either int or float64
+		var equity, pnl, pnlPct float64
 		var positionCount int
-		if pc, ok := account["position_count"].(int); ok {
-			positionCount = pc
-		} else if pc, ok := account["position_count"].(float64); ok {
-			positionCount = int(pc)
+
+		// If multiple traders share same account, split proportionally
+		if hasSharedAccount && totalInitialBalance > 0 {
+			// Calculate this trader's proportional share
+			proportion := initialBalance / totalInitialBalance
+			equity = sharedAccountEquity * proportion
+			pnl = equity - initialBalance
+			if initialBalance > 0 {
+				pnlPct = (pnl / initialBalance) * 100
+			}
+			
+			// For positions, we can't split them, so show all positions for each trader
+			// (This is a limitation - we can't track which positions belong to which trader)
+			if pc, ok := account["position_count"].(int); ok {
+				positionCount = pc
+			} else if pc, ok := account["position_count"].(float64); ok {
+				positionCount = int(pc)
+			}
 		} else {
-			positionCount = 0
+			// Normal case: each trader has own account
+			equity = account["total_equity"].(float64)
+			pnl = account["total_pnl"].(float64)
+			pnlPct = account["total_pnl_pct"].(float64)
+			
+			if pc, ok := account["position_count"].(int); ok {
+				positionCount = pc
+			} else if pc, ok := account["position_count"].(float64); ok {
+				positionCount = int(pc)
+			} else {
+				positionCount = 0
+			}
 		}
 
 		totalEquity += equity
-		totalInitialBalance += initialBalance
 		totalPositions += positionCount
 
 		agents = append(agents, map[string]interface{}{
@@ -229,11 +297,11 @@ func (s *Server) handlePortfolio(c *gin.Context) {
 			"trader_name":     t.GetName(),
 			"ai_model":        t.GetAIModel(),
 			"equity":          equity,
-			"initial_balance": initialBalance,
+			"initial_balance":  initialBalance,
 			"pnl":             pnl,
 			"pnl_pct":         pnlPct,
 			"position_count":  positionCount,
-			"is_running":      status["is_running"],
+			"is_running":       status["is_running"],
 		})
 
 		if isRunning, ok := status["is_running"].(bool); ok && !isRunning {
@@ -315,6 +383,73 @@ func (s *Server) handleAccount(c *gin.Context) {
 			"error": fmt.Sprintf("failed to get account info: %v", err),
 		})
 		return
+	}
+
+	// Check if this trader shares account with others (proportional balance splitting)
+	allTraders := s.traderManager.GetAllTraders()
+	if len(allTraders) > 1 {
+		// Get first trader's equity to check if shared
+		var firstTrader interface {
+			GetAccountInfo() (map[string]interface{}, error)
+		}
+		for _, t := range allTraders {
+			firstTrader = t
+			break
+		}
+		firstAccount, err := firstTrader.GetAccountInfo()
+		if err == nil {
+			firstEquity := firstAccount["total_equity"].(float64)
+			currentEquity := account["total_equity"].(float64)
+			// Check if all traders have same equity (shared account)
+			allSame := true
+			for _, t := range allTraders {
+				acc, err := t.GetAccountInfo()
+				if err != nil {
+					allSame = false
+					break
+				}
+				accEquity := acc["total_equity"].(float64)
+				if accEquity != firstEquity && (accEquity-firstEquity > 0.01 || firstEquity-accEquity > 0.01) {
+					allSame = false
+					break
+				}
+			}
+			
+			if allSame && currentEquity == firstEquity {
+				// Shared account detected - calculate proportional balance
+				status := trader.GetStatus()
+				initialBalance := 0.0
+				if ib, ok := status["initial_balance"].(float64); ok && ib > 0 {
+					initialBalance = ib
+				}
+				
+				// Calculate total initial balance
+				totalInitialBalance := 0.0
+				for _, t := range allTraders {
+					s := t.GetStatus()
+					if ib, ok := s["initial_balance"].(float64); ok && ib > 0 {
+						totalInitialBalance += ib
+					}
+				}
+				
+				if totalInitialBalance > 0 {
+					proportion := initialBalance / totalInitialBalance
+					equity := firstEquity * proportion
+					pnl := equity - initialBalance
+					pnlPct := 0.0
+					if initialBalance > 0 {
+						pnlPct = (pnl / initialBalance) * 100
+					}
+					
+					// Update account with proportional values
+					account["total_equity"] = equity
+					account["total_pnl"] = pnl
+					account["total_pnl_pct"] = pnlPct
+					account["wallet_balance"] = equity - account["unrealized_profit"].(float64)
+					account["available_balance"] = equity - account["margin_used"].(float64)
+				}
+			}
+		}
 	}
 
 	log.Printf("✓ Returning account info [%s]: equity=%.2f, available=%.2f, P/L=%.2f (%.2f%%)",
