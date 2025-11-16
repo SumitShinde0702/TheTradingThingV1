@@ -285,18 +285,28 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	// === Hard Constraints (Risk Control) ===
 	sb.WriteString("# ⚖️ Hard Constraints (Risk Control)\n\n")
 	sb.WriteString("1. **Risk-Reward Ratio**: Must be ≥ 1:3 (risk 1%, earn 3%+ return)\n")
-	sb.WriteString("2. **Maximum Positions**: 3 coins TOTAL (HARD LIMIT - quality > quantity)\n")
-	sb.WriteString("   - ⚠️ CRITICAL: If you already have positions, count them! Don't open more than 3 total!\n")
-	sb.WriteString("   - ⚠️ CRITICAL: Only open 1-2 new positions per cycle if you already have positions open\n")
-	sb.WriteString("   - ⚠️ CRITICAL: Opening 7 positions at once = margin exhaustion = all fail!\n")
-	sb.WriteString(fmt.Sprintf("3. **Single Coin Position**: Altcoins %.0f-%.0f USDT (%dx leverage) | BTC/ETH %.0f-%.0f USDT (%dx leverage)\n",
-		accountEquity*1.2, accountEquity*1.5, altcoinLeverage, accountEquity*8, accountEquity*10, btcEthLeverage))
-	sb.WriteString("4. **Margin**: Total usage ≤ 90%\n")
+	sb.WriteString("2. **Maximum Positions**: 6 positions TOTAL (HARD LIMIT - system will reject excess)\n")
+	sb.WriteString("   - ⚠️ CRITICAL: If you already have positions, count them! Don't open more than 6 total!\n")
+	sb.WriteString("   - ✅ ALLOWED: Multiple positions in the same coin are allowed (e.g., 2 ETHUSDT long positions)\n")
+	sb.WriteString("   - ⚠️ CRITICAL: Build gradually - add one position at a time and reassess\n")
+	sb.WriteString("   - ⚠️ CRITICAL: Opening too many positions at once = margin exhaustion = all fail!\n")
+	sb.WriteString("3. **Per-Position Size (MARGIN - Actual USDT Used)**: Use meaningful sizes to overcome fees\n")
+	sb.WriteString(fmt.Sprintf("   - Altcoins: $%.0f-$%.0f MARGIN per position (15-25%% of equity) | BTC/ETH: $%.0f-$%.0f MARGIN per position (20-35%% of equity)\n",
+		accountEquity*0.15, accountEquity*0.25, accountEquity*0.20, accountEquity*0.35))
+	sb.WriteString("   - 💡 IMPORTANT: `position_size_usd` is the MARGIN (actual USDT used), NOT the notional value!\n")
+	sb.WriteString(fmt.Sprintf("   - 💡 With %dx leverage, $%.0f margin = $%.0f notional position (%.0f × %d)\n", altcoinLeverage, accountEquity*0.20, accountEquity*0.20*float64(altcoinLeverage), accountEquity*0.20, altcoinLeverage))
+	sb.WriteString(fmt.Sprintf("   - 💡 With %.0f USDT available, you can open ~%.0f positions of $%.0f margin each\n", accountEquity*0.93, (accountEquity*0.93)/(accountEquity*0.20), accountEquity*0.20))
+	sb.WriteString("   - ⚠️ Positions below minimum are rejected (too small to overcome fees)\n")
+	sb.WriteString("4. **Margin**: Total usage ≤ 90% (keep some available for new opportunities)\n")
 	sb.WriteString("5. **Position Opening Strategy**:\n")
-	sb.WriteString("   - If 0 positions: Can open 1-2 positions\n")
-	sb.WriteString("   - If 1 position: Can open 1-2 more (max 3 total)\n")
-	sb.WriteString("   - If 2 positions: Can open 1 more (max 3 total)\n")
-	sb.WriteString("   - If 3 positions: WAIT - close one before opening another\n\n")
+	sb.WriteString("   - If 0-2 positions: Can open 1-2 new positions (build gradually)\n")
+	sb.WriteString("   - If 3-4 positions: Can open 1-2 more (max 6 total) - use available capital!\n")
+	sb.WriteString("   - If 5 positions: Can open 1 more (max 6 total)\n")
+	sb.WriteString("   - If 6 positions: WAIT - close one before opening another\n")
+	marginPerPos := accountEquity * 0.20
+	maxPos := (accountEquity * 0.93) / marginPerPos
+	sb.WriteString(fmt.Sprintf("   - 💡 Current: With %.0f USDT available, you can open ~%.0f positions of $%.0f margin each - don't be too conservative!\n\n",
+		accountEquity*0.93, maxPos, marginPerPos))
 
 	// === Long/Short Balance ===
 	sb.WriteString("# 📉 Long/Short Balance\n\n")
@@ -330,33 +340,55 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- Use the methods you consider most effective to discover high-confidence opportunities\n")
 	sb.WriteString("- Only open positions when comprehensive confidence ≥ 85 (STRICT: real trading requires higher confidence)\n")
 	sb.WriteString("- ⚠️ CRITICAL: Each trade costs 0.02-0.04% in fees. With small positions, fees = 20-50% of profit!\n")
-	sb.WriteString("- ⚠️ CRITICAL: Use LARGE position sizes (8-10x equity for BTC/ETH, 1.2-1.5x for altcoins) to overcome fees\n")
-	sb.WriteString(fmt.Sprintf("- ⚠️ CRITICAL: System will REJECT positions < %.0f USDT (BTC/ETH) or < %.0f USDT (altcoins)!\n", accountEquity*5, accountEquity*0.8))
+	sb.WriteString(fmt.Sprintf("- ⚠️ CRITICAL: Use MEANINGFUL position sizes to overcome fees (with %.0f USDT equity, you have ~%.0f USDT available)\n", accountEquity, accountEquity*0.97))
+	sb.WriteString(fmt.Sprintf("  • BTC/ETH: Target $%.0f-$%.0f per position (20-35%% of equity) - use leverage to maximize notional value\n", accountEquity*0.20, accountEquity*0.35))
+	sb.WriteString(fmt.Sprintf("  • Altcoins: Target $%.0f-$%.0f per position (15-25%% of equity) - use leverage to maximize notional value\n", accountEquity*0.15, accountEquity*0.25))
+	sb.WriteString(fmt.Sprintf("- ⚠️ CRITICAL: System will REJECT positions < $%.0f (BTC/ETH) or < $%.0f (altcoins) - too small to overcome fees!\n", accountEquity*0.20, accountEquity*0.15))
 	sb.WriteString("- ⚠️ CRITICAL: Only trade if expected profit > 1% to overcome fees + slippage\n")
 	sb.WriteString("- ⚠️ CRITICAL: Hold positions minimum 15-20 minutes. Don't close positions < 15 minutes old unless stop loss hit\n")
 	sb.WriteString("- 💡 Strategy: Fewer, larger trades = less fees, more profit. Quality over quantity!\n")
-	sb.WriteString("- 💡 REAL EXAMPLE: 3.4 USDT ETH trade with 0.0017 USDT fee = 5% fee! Use 75+ USDT instead!\n\n")
+	sb.WriteString("- 💡 REAL EXAMPLE: $15 position with $0.006 fee = 0.04% fee. $50 position with $0.02 fee = 0.04% fee. Same % but 3x profit potential!\n\n")
 	sb.WriteString("**Avoid low-quality signals**:\n")
 	sb.WriteString("- Single dimension (only looking at one indicator)\n")
 	sb.WriteString("- Contradictory (price up but volume shrinking)\n")
 	sb.WriteString("- Range-bound oscillation\n")
 	sb.WriteString("- Recently closed (<15 minutes ago)\n\n")
-	sb.WriteString("**CRITICAL: Position Management Rules**:\n")
-	sb.WriteString("- ⚠️ NEVER close positions that are losing money (negative P&L)\n")
-	sb.WriteString("- ✅ ONLY close positions when they are profitable (positive P&L) OR stop loss is hit\n")
-	sb.WriteString("- 💡 Strategy: Hold losing positions until they recover - let winners run, let losers recover\n")
-	sb.WriteString("- 🎯 This prevents realizing losses and allows positions to turn profitable\n")
-	sb.WriteString("- ⚠️ Exception: If stop loss is hit, position will auto-close (this is acceptable)\n\n")
+	sb.WriteString("**🚨 CRITICAL: Position Management Rules - READ CAREFULLY 🚨**:\n")
+	sb.WriteString("- 🚫 **ABSOLUTELY FORBIDDEN**: NEVER close positions that are losing money (negative P&L/unrealized P&L)\n")
+	sb.WriteString("- 🚫 **SYSTEM WILL REJECT**: If you try to close a losing position, the system will automatically reject it\n")
+	sb.WriteString("- ✅ **ONLY ALLOWED**: Close positions when they are profitable (positive P&L) OR stop loss is hit\n")
+	sb.WriteString("- 💡 **Strategy**: Hold losing positions until they recover - let winners run, let losers recover\n")
+	sb.WriteString("- 🎯 **Why**: This prevents realizing losses and allows positions to turn profitable\n")
+	sb.WriteString("- ⚠️ **Exception**: If stop loss is hit, position will auto-close (this is acceptable)\n")
+	sb.WriteString("- 📋 **Example**: If BNBUSDT is -2.5%% (losing), DO NOT close it. Wait until it becomes positive, THEN close.\n")
+	sb.WriteString("- 📋 **Example**: If ETHUSDT is +5.1%% (profitable), you CAN close it to lock in profits.\n\n")
+	sb.WriteString("**Take Profit Strategy**:\n")
+	sb.WriteString("- ✅ Take profits when positions are significantly profitable (≥3-5%+ unrealized P&L)\n")
+	sb.WriteString("- ✅ Close positions that have reached or exceeded take profit targets\n")
+	sb.WriteString("- ✅ If position is profitable but trend is reversing, take profit to lock in gains\n")
+	sb.WriteString("- 💡 Balance: Don't close too early (<2% profit), but don't be greedy - take profits when good (3-5%+)\n")
+	sb.WriteString("- 💡 Example: ETH +5.51%% is excellent profit - consider closing to lock in gains, especially if trend weakening\n")
+	sb.WriteString("- ⚠️ Remember: Fees are already paid when opening - closing profitable positions locks in real profit!\n\n")
 	sb.WriteString("**CRITICAL: Position Limit Rules**:\n")
 	sb.WriteString("- ⚠️ MAXIMUM 6 POSITIONS TOTAL (HARD LIMIT - system will reject excess)\n")
+	sb.WriteString("- ✅ ALLOWED: Multiple positions in the same coin are allowed (e.g., 2 ETHUSDT long, 1 ETHUSDT short)\n")
 	sb.WriteString("- ⚠️ Check current positions before deciding to open new ones!\n")
 	sb.WriteString("- ⚠️ Build gradually: add one position at a time and reassess before adding more\n")
+	marginPerPos3 := accountEquity * 0.20
+	maxPos3 := (accountEquity * 0.93) / marginPerPos3
+	sb.WriteString(fmt.Sprintf("- 💡 With %.0f USDT available, you can open ~%.0f positions of $%.0f margin each - don't be too conservative!\n",
+		accountEquity*0.93, maxPos3, marginPerPos3))
 	sb.WriteString("- ⚠️ If you already have 4-5 positions, HOLD unless a high-conviction setup appears\n")
-	sb.WriteString("- 💡 Strategy: Quality over quantity - 1-2 good positions > 7 mediocre positions\n\n")
+	sb.WriteString("- 💡 Strategy: Quality over quantity - but use available capital efficiently!\n\n")
 
 	// === Sharpe Ratio Self-Evolution ===
-	sb.WriteString("# 🧬 Sharpe Ratio Self-Evolution\n\n")
-	sb.WriteString("You will receive **Sharpe Ratio** as performance feedback each cycle:\n\n")
+	sb.WriteString("# 🧬 Sharpe Ratio Self-Evolution & Learning from Mistakes\n\n")
+	sb.WriteString("You will receive **Sharpe Ratio** and **Historical Performance** as feedback each cycle:\n\n")
+	sb.WriteString("**CRITICAL: You MUST learn from your mistakes!**\n")
+	sb.WriteString("- If you see recent losses, analyze WHY they happened\n")
+	sb.WriteString("- If a symbol consistently loses, avoid it or be extra cautious\n")
+	sb.WriteString("- If your win rate is low, reduce trading frequency and only take highest confidence setups\n")
+	sb.WriteString("- If losses are large, your position sizing or stop loss placement may be wrong\n\n")
 	sb.WriteString("**Sharpe Ratio < -0.5** (sustained losses):\n")
 	sb.WriteString("  → 🛑 Stop trading, wait at least 6 cycles (18 minutes)\n")
 	sb.WriteString("  → 🔍 Deep reflection:\n")
@@ -366,10 +398,10 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("     • Are you shorting? (one-sided long-only is wrong)\n\n")
 	sb.WriteString("**Sharpe Ratio -0.5 ~ 0** (slight losses):\n")
 	sb.WriteString("  → ⚠️ Strict control: only trades with confidence ≥85\n")
-	sb.WriteString("  → Reduce frequency: maximum 1 new position per 30 minutess\n")
+	sb.WriteString("  → Reduce frequency: maximum 1 new position per 30 minutes\n")
 	sb.WriteString("  → Patient holding: hold at least 20+ minutes (fees require longer holds)\n")
-	sb.WriteString("  → ⚠️ FEES MATTER: With small capital, keep trades meaningful — target $13-$18 per position, trade less, hold longer but if its decent profit and can cover fees, just close it\n")
-	sb.WriteString("  → 💡 Keep size consistent: BTC/ETH slightly larger (~$15-$18), altcoins ~$13-$16\n\n")
+	sb.WriteString(fmt.Sprintf("  → ⚠️ FEES MATTER: Use meaningful position sizes — target $%.0f-$%.0f (BTC/ETH) or $%.0f-$%.0f (altcoins) per position\n", accountEquity*0.20, accountEquity*0.35, accountEquity*0.15, accountEquity*0.25))
+	sb.WriteString("  → 💡 Trade less, hold longer, but if decent profit and can cover fees, just close it\n\n")
 	sb.WriteString("**Sharpe Ratio 0 ~ 0.7** (positive returns):\n")
 	sb.WriteString("  → ✅ Maintain current strategy\n\n")
 	sb.WriteString("**Sharpe Ratio > 0.7** (excellent performance):\n")
@@ -380,6 +412,9 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("# 📋 Decision Process\n\n")
 	sb.WriteString("1. **Analyze Sharpe Ratio**: Is current strategy effective? Need adjustment?\n")
 	sb.WriteString("2. **Evaluate positions**: Has trend changed? Should take profit/stop loss?\n")
+	sb.WriteString("   - 🚫 **CRITICAL**: DO NOT close positions with negative P&L (losing positions)\n")
+	sb.WriteString("   - ✅ **ONLY**: Close positions with positive P&L (profitable positions) to lock in gains\n")
+	sb.WriteString("   - 💡 **Remember**: The system will automatically reject any attempt to close a losing position\n")
 	sb.WriteString("3. **Find new opportunities**: Any strong signals? Long/short opportunities?\n")
 	sb.WriteString("4. **Output decision**: Chain of thought analysis + JSON\n\n")
 
@@ -393,25 +428,33 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("Even if you decide to wait, output an array with at least one decision (e.g., `{\"symbol\": \"ALL\", \"action\": \"wait\", \"reasoning\": \"...\"}`).\n\n")
 	sb.WriteString("Format example:\n")
 	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 40, \"reasoning\": \"Downtrend + MACD bearish crossover\"},\n", btcEthLeverage, math.Max(15, accountEquity*0.20)))
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"ADAUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 0.5200, \"take_profit\": 0.5750, \"confidence\": 88, \"risk_usd\": 20, \"reasoning\": \"Oversold bounce + volume expansion\"},\n", altcoinLeverage, math.Max(13, accountEquity*0.15)))
-	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"close_long\", \"reasoning\": \"Take profit exit\"}\n")
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 40, \"reasoning\": \"Downtrend + MACD bearish crossover\"},\n", btcEthLeverage, accountEquity*0.25))
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"ADAUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 0.5200, \"take_profit\": 0.5750, \"confidence\": 88, \"risk_usd\": 20, \"reasoning\": \"Oversold bounce + volume expansion\"},\n", altcoinLeverage, accountEquity*0.20))
+	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"close_long\", \"reasoning\": \"Take profit exit - position is profitable (+5.2%%)\"}\n")
 	sb.WriteString("]\n```\n")
-	sb.WriteString("⚠️ Note: Keep position sizes in the example range (~$13-$18). Smaller trades get eaten by fees; oversized trades tie up margin.\n\n")
+	sb.WriteString("⚠️ **CRITICAL REMINDER**: Only close positions that are PROFITABLE (positive P&L). If a position is losing (negative P&L), DO NOT attempt to close it - the system will reject it automatically. Example: If BNBUSDT is -2.5%%, wait until it becomes positive before closing.\n\n")
+	sb.WriteString(fmt.Sprintf("⚠️ Note: Position sizes should be meaningful ($%.0f-$%.0f for BTC/ETH, $%.0f-$%.0f for altcoins). Smaller trades get eaten by fees; oversized trades tie up margin.\n\n", accountEquity*0.20, accountEquity*0.35, accountEquity*0.15, accountEquity*0.25))
 	sb.WriteString("**Field descriptions**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100 (REQUIRE ≥85 for opening positions - fees require higher confidence)\n")
-	sb.WriteString("- `position_size_usd`: Stay inside the $13-$18 sweet spot (system enforced):\n")
-	sb.WriteString(fmt.Sprintf("  • BTC/ETH: MINIMUM %.0f USDT (or $15, whichever is higher) – keep between $15-$18 to stay nimble\n", math.Max(15, accountEquity*0.20)))
-	sb.WriteString(fmt.Sprintf("  • Altcoins: MINIMUM %.0f USDT (or $13) – target roughly $13-$16\n", math.Max(13, accountEquity*0.15)))
-	sb.WriteString("  • ⚠️ Positions below the minimum are rejected automatically\n")
-	sb.WriteString("  • ⚠️ Oversized trades (>~$25) exhaust margin and block new opportunities – avoid them\n")
-	sb.WriteString("  • 💡 Goal: keep enough free balance so we can layer into better setups when they appear\n")
+	sb.WriteString("- `position_size_usd`: MARGIN (actual USDT used), NOT notional! Use meaningful sizes based on your equity:\n")
+	sb.WriteString(fmt.Sprintf("  • BTC/ETH: MINIMUM $%.0f MARGIN (20%% of equity) – TARGET $%.0f-$%.0f MARGIN (20-35%% of equity)\n", accountEquity*0.20, accountEquity*0.20, accountEquity*0.35))
+	sb.WriteString(fmt.Sprintf("  • Altcoins: MINIMUM $%.0f MARGIN (15%% of equity) – TARGET $%.0f-$%.0f MARGIN (15-25%% of equity)\n", accountEquity*0.15, accountEquity*0.15, accountEquity*0.25))
+	sb.WriteString(fmt.Sprintf("  • 💡 CRITICAL: With %dx leverage, $%.0f margin = $%.0f notional position (%.0f × %d)\n", altcoinLeverage, accountEquity*0.20, accountEquity*0.20*float64(altcoinLeverage), accountEquity*0.20, altcoinLeverage))
+	sb.WriteString(fmt.Sprintf("  • 💡 Example: $%.0f margin with %dx leverage creates a $%.0f notional position\n", accountEquity*0.20, altcoinLeverage, accountEquity*0.20*float64(altcoinLeverage)))
+	marginPerPosition := accountEquity * 0.20
+	maxPositions := (accountEquity * 0.93) / marginPerPosition
+	sb.WriteString(fmt.Sprintf("  • 💡 With %.0f USDT available, you can open ~%.0f positions of $%.0f margin each\n", accountEquity*0.93, maxPositions, marginPerPosition))
+	sb.WriteString("  • ⚠️ Positions below the minimum are rejected automatically (too small to overcome fees)\n")
+	sb.WriteString(fmt.Sprintf("  • ⚠️ Maximum: $%.0f margin for BTC/ETH, $%.0f margin for altcoins (to keep margin available for other opportunities)\n", accountEquity*0.50, accountEquity*0.40))
+	sb.WriteString("  • 💡 IMPORTANT: Calculate position size as a percentage of the ACTUAL equity shown in the account section, not a fixed dollar amount\n")
+	sb.WriteString(fmt.Sprintf("  • 💡 Example: If equity is 210 USDT, 25%% = 52.5 USDT MARGIN, 30%% = 63 USDT MARGIN. With %dx leverage, this creates $%.0f-$%.0f notional positions\n", altcoinLeverage, 52.5*float64(altcoinLeverage), 63*float64(altcoinLeverage)))
 	sb.WriteString("- Required for opening: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
 	sb.WriteString("- If no actions: use `{\"symbol\": \"ALL\", \"action\": \"wait\", \"reasoning\": \"your reason\"}`\n\n")
 
 	// === Key Reminders ===
 	sb.WriteString("---\n\n")
+	sb.WriteString("🚨 **CRITICAL REMINDER**: NEVER attempt to close positions with negative P&L (losing positions). The system will automatically reject such decisions. Only close positions when they are profitable (positive P&L). This is a hard rule that cannot be overridden. If you see a position is losing money, wait for it to recover before closing.\n\n")
 	sb.WriteString("**Remember**: \n")
 	sb.WriteString("- Goal is Sharpe Ratio, not trading frequency\n")
 	sb.WriteString("- Short = Long, both are profit tools\n")
@@ -502,16 +545,124 @@ func buildUserPrompt(ctx *Context) string {
 	}
 	sb.WriteString("\n")
 
-	// Sharpe Ratio (pass value directly, no complex formatting)
+	// Historical Performance & Learning Data
 	if ctx.Performance != nil {
-		// Extract SharpeRatio directly from interface{}
+		// Extract performance data
 		type PerformanceData struct {
-			SharpeRatio float64 `json:"sharpe_ratio"`
+			SharpeRatio   float64 `json:"sharpe_ratio"`
+			TotalTrades   int     `json:"total_trades"`
+			WinningTrades int     `json:"winning_trades"`
+			LosingTrades  int     `json:"losing_trades"`
+			WinRate       float64 `json:"win_rate"`
+			AvgWin        float64 `json:"avg_win"`
+			AvgLoss       float64 `json:"avg_loss"`
+			ProfitFactor  float64 `json:"profit_factor"`
+			RecentTrades  []struct {
+				Symbol     string  `json:"symbol"`
+				Side       string  `json:"side"`
+				OpenPrice  float64 `json:"open_price"`
+				ClosePrice float64 `json:"close_price"`
+				PnL        float64 `json:"pn_l"`
+				PnLPct     float64 `json:"pn_l_pct"`
+				Duration   string  `json:"duration"`
+			} `json:"recent_trades"`
+			BestSymbol  string `json:"best_symbol"`
+			WorstSymbol string `json:"worst_symbol"`
 		}
 		var perfData PerformanceData
 		if jsonData, err := json.Marshal(ctx.Performance); err == nil {
 			if err := json.Unmarshal(jsonData, &perfData); err == nil {
-				sb.WriteString(fmt.Sprintf("## 📊 Sharpe Ratio: %.2f\n\n", perfData.SharpeRatio))
+				sb.WriteString("## 📊 Historical Performance (Learn from Past Trades)\n\n")
+
+				// Overall stats
+				if perfData.TotalTrades > 0 {
+					sb.WriteString(fmt.Sprintf("**Overall Stats**: %d trades | Win Rate: %.1f%% | Sharpe: %.2f | Profit Factor: %.2f\n",
+						perfData.TotalTrades, perfData.WinRate, perfData.SharpeRatio, perfData.ProfitFactor))
+					if perfData.AvgWin > 0 {
+						sb.WriteString(fmt.Sprintf("**Avg Win**: +%.2f USDT | **Avg Loss**: %.2f USDT\n\n",
+							perfData.AvgWin, perfData.AvgLoss))
+					}
+				}
+
+				// Best/worst symbols
+				if perfData.BestSymbol != "" {
+					sb.WriteString(fmt.Sprintf("**Best Symbol**: %s | **Worst Symbol**: %s\n\n",
+						perfData.BestSymbol, perfData.WorstSymbol))
+				}
+
+				// Recent trades (last 5-10 for learning)
+				if len(perfData.RecentTrades) > 0 {
+					sb.WriteString("**Recent Trades (Learn from these)**:\n")
+					displayCount := len(perfData.RecentTrades)
+					if displayCount > 10 {
+						displayCount = 10 // Show last 10 trades
+					}
+
+					// Separate wins and losses for better learning
+					var wins, losses []struct {
+						Symbol     string  `json:"symbol"`
+						Side       string  `json:"side"`
+						OpenPrice  float64 `json:"open_price"`
+						ClosePrice float64 `json:"close_price"`
+						PnL        float64 `json:"pn_l"`
+						PnLPct     float64 `json:"pn_l_pct"`
+						Duration   string  `json:"duration"`
+					}
+
+					for i := 0; i < displayCount && i < len(perfData.RecentTrades); i++ {
+						trade := perfData.RecentTrades[i]
+						tradeCopy := struct {
+							Symbol     string  `json:"symbol"`
+							Side       string  `json:"side"`
+							OpenPrice  float64 `json:"open_price"`
+							ClosePrice float64 `json:"close_price"`
+							PnL        float64 `json:"pn_l"`
+							PnLPct     float64 `json:"pn_l_pct"`
+							Duration   string  `json:"duration"`
+						}{
+							Symbol:     trade.Symbol,
+							Side:       trade.Side,
+							OpenPrice:  trade.OpenPrice,
+							ClosePrice: trade.ClosePrice,
+							PnL:        trade.PnL,
+							PnLPct:     trade.PnLPct,
+							Duration:   trade.Duration,
+						}
+						if trade.PnL > 0 {
+							wins = append(wins, tradeCopy)
+						} else {
+							losses = append(losses, tradeCopy)
+						}
+					}
+
+					// Show losses first (learn from mistakes)
+					if len(losses) > 0 {
+						sb.WriteString(fmt.Sprintf("\n**❌ Recent Losses (%d) - Learn from these mistakes**:\n", len(losses)))
+						for i, trade := range losses {
+							sb.WriteString(fmt.Sprintf("  %d. %s %s ❌ LOSS | Entry: %.4f → Exit: %.4f | P&L: %.2f USDT (%.2f%%) | Duration: %s\n",
+								i+1, trade.Symbol, strings.ToUpper(trade.Side),
+								trade.OpenPrice, trade.ClosePrice, trade.PnL, trade.PnLPct, trade.Duration))
+						}
+						sb.WriteString(fmt.Sprintf("  💡 **Key Questions**: Why did these lose? Was entry timing wrong? Was stop loss too wide? Was signal quality insufficient?\n"))
+					}
+
+					// Then show wins (reinforce what works)
+					if len(wins) > 0 {
+						sb.WriteString(fmt.Sprintf("\n**✅ Recent Wins (%d) - Reinforce what works**:\n", len(wins)))
+						for i, trade := range wins {
+							sb.WriteString(fmt.Sprintf("  %d. %s %s ✅ WIN | Entry: %.4f → Exit: %.4f | P&L: +%.2f USDT (+%.2f%%) | Duration: %s\n",
+								i+1, trade.Symbol, strings.ToUpper(trade.Side),
+								trade.OpenPrice, trade.ClosePrice, trade.PnL, trade.PnLPct, trade.Duration))
+						}
+						sb.WriteString(fmt.Sprintf("  💡 **Key Questions**: What made these profitable? What signals/conditions were present?\n"))
+					}
+
+					sb.WriteString("\n**💡 Learning Strategy**:\n")
+					sb.WriteString("  - If recent losses > wins: Be MORE conservative, wait for stronger signals (confidence ≥90)\n")
+					sb.WriteString("  - If recent losses in specific symbols: Avoid those symbols or be extra cautious\n")
+					sb.WriteString("  - If losses are large: Review position sizing and stop loss placement\n")
+					sb.WriteString("  - If win rate < 50%%: Reduce trading frequency, only trade highest confidence setups\n\n")
+				}
 			}
 		}
 	}
@@ -1062,42 +1213,44 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	// Opening positions must provide complete parameters
 	if d.Action == "open_long" || d.Action == "open_short" {
 		// Use configured leverage limits based on coin type
-		maxLeverage := altcoinLeverage          // Altcoins use configured leverage
-		maxPositionValue := accountEquity * 1.5 // Altcoins max 1.5x account equity
+		maxLeverage := altcoinLeverage // Altcoins use configured leverage
 		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			maxLeverage = btcEthLeverage          // BTC and ETH use configured leverage
-			maxPositionValue = accountEquity * 10 // BTC/ETH max 10x account equity
+			maxLeverage = btcEthLeverage // BTC and ETH use configured leverage
 		}
 
 		if d.Leverage <= 0 || d.Leverage > maxLeverage {
 			return fmt.Errorf("leverage must be between 1-%d (%s, current config limit %dx): %d", maxLeverage, d.Symbol, maxLeverage, d.Leverage)
 		}
 		if d.PositionSizeUSD <= 0 {
-			return fmt.Errorf("position size must be greater than 0: %.2f", d.PositionSizeUSD)
+			return fmt.Errorf("position margin must be greater than 0: %.2f", d.PositionSizeUSD)
 		}
 
-		// Validate MINIMUM position size to keep trades meaningful
-		minPositionValue := math.Max(13, accountEquity*0.15) // Altcoins: ~$13-$16
+		// Validate MINIMUM position size (MARGIN) to keep trades meaningful (must overcome fees)
+		// position_size_usd is now MARGIN, not notional
+		minMargin := math.Max(13, accountEquity*0.15) // Altcoins: 15% of equity minimum margin
 		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			minPositionValue = math.Max(15, accountEquity*0.20) // BTC/ETH: ~$15-$18
+			minMargin = math.Max(15, accountEquity*0.20) // BTC/ETH: 20% of equity minimum margin
 		}
-		if d.PositionSizeUSD < minPositionValue {
+		if d.PositionSizeUSD < minMargin {
 			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-				return fmt.Errorf("position size too small: %.2f USDT (minimum %.0f USDT). Target $15-$18 to keep margin flexible",
-					d.PositionSizeUSD, minPositionValue)
+				return fmt.Errorf("position margin too small: %.2f USDT (minimum %.0f USDT = 20%% of equity). Target %.0f-%.0f USDT margin (20-35%% of equity) for meaningful profits",
+					d.PositionSizeUSD, minMargin, accountEquity*0.20, accountEquity*0.35)
 			} else {
-				return fmt.Errorf("position size too small: %.2f USDT (minimum %.0f USDT). Target ~$13-$16 per trade",
-					d.PositionSizeUSD, minPositionValue)
+				return fmt.Errorf("position margin too small: %.2f USDT (minimum %.0f USDT = 15%% of equity). Target %.0f-%.0f USDT margin (15-25%% of equity) for meaningful profits",
+					d.PositionSizeUSD, minMargin, accountEquity*0.15, accountEquity*0.25)
 			}
 		}
 
-		// Validate position value upper limit (add 1% tolerance to avoid floating point precision issues)
-		tolerance := maxPositionValue * 0.01 // 1% tolerance
-		if d.PositionSizeUSD > maxPositionValue+tolerance {
+		// Validate position margin upper limit (position_size_usd is now MARGIN, not notional)
+		maxMargin := accountEquity * 0.50 // Max 50% of equity as margin for BTC/ETH
+		if d.Symbol != "BTCUSDT" && d.Symbol != "ETHUSDT" {
+			maxMargin = accountEquity * 0.40 // Max 40% of equity as margin for altcoins
+		}
+		if d.PositionSizeUSD > maxMargin {
 			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-				return fmt.Errorf("BTC/ETH single coin position value cannot exceed %.0f USDT (10x account equity), actual: %.0f", maxPositionValue, d.PositionSizeUSD)
+				return fmt.Errorf("BTC/ETH position margin cannot exceed %.0f USDT (50%% of equity), actual: %.0f", maxMargin, d.PositionSizeUSD)
 			} else {
-				return fmt.Errorf("altcoin single coin position value cannot exceed %.0f USDT (1.5x account equity), actual: %.0f", maxPositionValue, d.PositionSizeUSD)
+				return fmt.Errorf("altcoin position margin cannot exceed %.0f USDT (40%% of equity), actual: %.0f", maxMargin, d.PositionSizeUSD)
 			}
 		}
 		if d.StopLoss <= 0 || d.TakeProfit <= 0 {

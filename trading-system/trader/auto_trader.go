@@ -357,6 +357,16 @@ func (at *AutoTrader) Run() error {
 	ticker := time.NewTicker(at.config.ScanInterval)
 	defer ticker.Stop()
 
+	// Start background position monitor (checks every 2 minutes for profitable positions to close)
+	positionMonitorTicker := time.NewTicker(2 * time.Minute)
+	defer positionMonitorTicker.Stop()
+
+	// Channel to stop background monitor
+	stopMonitor := make(chan bool, 1)
+
+	// Start background position monitor goroutine
+	go at.startPositionMonitor(positionMonitorTicker, stopMonitor)
+
 	// Execute immediately on first run
 	log.Printf("[%s] ▶️  Starting first cycle immediately...", at.name)
 	if err := at.runCycle(); err != nil {
@@ -378,8 +388,91 @@ func (at *AutoTrader) Run() error {
 		}
 	}
 
+	// Stop background monitor when main loop exits
+	stopMonitor <- true
+
 	log.Printf("[%s] ⏹ Auto trading system stopped (isRunning=false)", at.name)
 	return nil
+}
+
+// startPositionMonitor runs a background goroutine that checks positions every 2 minutes
+// and automatically closes positions with >3% profit
+func (at *AutoTrader) startPositionMonitor(ticker *time.Ticker, stopChan chan bool) {
+	log.Printf("[%s] 🔄 Background position monitor started (checking every 2 minutes for positions >3%% profit)", at.name)
+
+	for {
+		select {
+		case <-ticker.C:
+			at.checkAndCloseProfitablePositions()
+		case <-stopChan:
+			log.Printf("[%s] 🛑 Background position monitor stopped", at.name)
+			return
+		}
+	}
+}
+
+// checkAndCloseProfitablePositions checks all open positions and closes those with >3% profit
+func (at *AutoTrader) checkAndCloseProfitablePositions() {
+	// Skip if not running
+	if !at.isRunning {
+		return
+	}
+
+	// Get current positions
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return // Silently skip on error
+	}
+
+	if len(positions) == 0 {
+		return // No positions to check
+	}
+
+	// Check each position silently, only log when closing
+	for _, pos := range positions {
+		symbol, _ := pos["symbol"].(string)
+		side, _ := pos["side"].(string)
+		unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
+		entryPrice, _ := pos["entryPrice"].(float64)
+		markPrice, _ := pos["markPrice"].(float64)
+		leverage, _ := pos["leverage"].(float64)
+
+		if leverage == 0 {
+			leverage = 7 // Default leverage if not found
+		}
+
+		// Calculate P&L percentage (with leverage)
+		var pnlPct float64
+		if strings.ToLower(side) == "long" {
+			priceChange := (markPrice - entryPrice) / entryPrice
+			pnlPct = priceChange * 100 * leverage
+		} else {
+			priceChange := (entryPrice - markPrice) / entryPrice
+			pnlPct = priceChange * 100 * leverage
+		}
+
+		// Only close if profitable AND >3%
+		if unrealizedPnl > 0 && pnlPct >= 3.0 {
+			log.Printf("[%s] 🎯 [Background Monitor] %s %s: %.2f%% profit (%.2f USDT) - Auto-closing immediately!",
+				at.name, symbol, strings.ToUpper(side), pnlPct, unrealizedPnl)
+
+			// Close the position immediately
+			var closeErr error
+			if strings.ToLower(side) == "long" {
+				_, closeErr = at.trader.CloseLong(symbol, 0)
+			} else {
+				_, closeErr = at.trader.CloseShort(symbol, 0)
+			}
+
+			if closeErr != nil {
+				log.Printf("[%s] ❌ [Background Monitor] Failed to auto-close %s %s: %v",
+					at.name, symbol, strings.ToUpper(side), closeErr)
+			} else {
+				log.Printf("[%s] ✅ [Background Monitor] Successfully auto-closed %s %s at %.2f%% profit (%.2f USDT)",
+					at.name, symbol, strings.ToUpper(side), pnlPct, unrealizedPnl)
+			}
+		}
+	}
 }
 
 // Stop Stops auto trading
@@ -486,8 +579,29 @@ func (at *AutoTrader) runCycle() error {
 	// Log account status - these are ACTUAL Binance account values (same for both traders on shared account)
 	// Note: For shared accounts, frontend will show proportional values per trader, but logs show actual account values
 	unrealizedPnL := ctx.Account.TotalEquity - ctx.Account.WalletBalance
+	marginUsed := ctx.Account.TotalEquity - ctx.Account.AvailableBalance
 	log.Printf("📊 Margin Balance (Equity): %.2f USDT | Wallet Balance: %.2f USDT | Available: %.2f USDT | Unrealized P&L: %.2f USDT | Positions: %d",
 		ctx.Account.TotalEquity, ctx.Account.WalletBalance, ctx.Account.AvailableBalance, unrealizedPnL, ctx.Account.PositionCount)
+	log.Printf("💡 Margin Used: %.2f USDT (%.1f%% of equity) - locked in %d open positions", marginUsed, (marginUsed/ctx.Account.TotalEquity)*100, ctx.Account.PositionCount)
+
+	// Show breakdown of margin usage per position
+	if len(ctx.Positions) > 0 {
+		log.Printf("📋 Margin Breakdown by Position:")
+		for _, pos := range ctx.Positions {
+			// Format P&L with color indicator
+			pnlSign := "+"
+			if pos.UnrealizedPnL < 0 {
+				pnlSign = ""
+			}
+			log.Printf("   • %s %s: %.2f USDT margin (%.1f%% of equity) | Notional: %.2f USDT | Leverage: %dx | P&L: %s%.2f USDT (%s%.2f%%)",
+				pos.Symbol, strings.ToUpper(pos.Side), pos.MarginUsed,
+				(pos.MarginUsed/ctx.Account.TotalEquity)*100,
+				pos.Quantity*pos.MarkPrice, pos.Leverage,
+				pnlSign, pos.UnrealizedPnL, pnlSign, pos.UnrealizedPnLPct)
+		}
+	}
+
+	log.Printf("💡 Available = Equity (%.2f) - Margin Used (%.2f) = %.2f USDT", ctx.Account.TotalEquity, marginUsed, ctx.Account.AvailableBalance)
 	if ctx.Account.AvailableBalance < 0.01 {
 		log.Printf("⚠️  Available balance is $0 - all margin is used by open positions. This is normal when positions are open.")
 	}
@@ -964,15 +1078,7 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decisionPkg.Decision, 
 func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📈 Opening long position: %s", decision.Symbol)
 
-	// ⚠️ Critical: Check if there's already a position in the same coin and direction, if so reject opening (prevent position stacking overflow)
-	positions, err := at.trader.GetPositions()
-	if err == nil {
-		for _, pos := range positions {
-			if pos["symbol"] == decision.Symbol && pos["side"] == "long" {
-				return fmt.Errorf("❌ %s already has a long position, rejecting to prevent position stacking overflow. To swap positions, please provide close_long decision first", decision.Symbol)
-			}
-		}
-	}
+	// Note: Multiple positions in the same coin are allowed (user preference)
 
 	// Get current price
 	marketData, err := market.Get(decision.Symbol)
@@ -980,8 +1086,12 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, 
 		return err
 	}
 
-	// Calculate quantity
-	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
+	// Calculate quantity from MARGIN
+	// position_size_usd is now MARGIN, not notional
+	// notional = margin * leverage
+	// quantity = notional / price
+	notionalValue := decision.PositionSizeUSD * float64(decision.Leverage)
+	quantity := notionalValue / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 
@@ -1017,15 +1127,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, 
 func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📉 Opening short position: %s", decision.Symbol)
 
-	// ⚠️ Critical: Check if there's already a position in the same coin and direction, if so reject opening (prevent position stacking overflow)
-	positions, err := at.trader.GetPositions()
-	if err == nil {
-		for _, pos := range positions {
-			if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
-				return fmt.Errorf("❌ %s already has a short position, rejecting to prevent position stacking overflow. To swap positions, please provide close_short decision first", decision.Symbol)
-			}
-		}
-	}
+	// Note: Multiple positions in the same coin are allowed (user preference)
 
 	// Get current price
 	marketData, err := market.Get(decision.Symbol)
@@ -1033,8 +1135,12 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision,
 		return err
 	}
 
-	// Calculate quantity
-	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
+	// Calculate quantity from MARGIN
+	// position_size_usd is now MARGIN, not notional
+	// notional = margin * leverage
+	// quantity = notional / price
+	notionalValue := decision.PositionSizeUSD * float64(decision.Leverage)
+	quantity := notionalValue / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
 

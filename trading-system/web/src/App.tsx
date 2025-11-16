@@ -7,6 +7,7 @@ import { PortfolioView } from './components/PortfolioView';
 import { ExperimentalDashboard } from './components/ExperimentalDashboard';
 import AILearning from './components/AILearning';
 import { TradingSignal } from './components/TradingSignal';
+import { AIDecisionView } from './components/AIDecisionView';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { t, type Language } from './i18n/translations';
 import type {
@@ -19,7 +20,7 @@ import type {
   TraderInfo,
 } from './types';
 
-type Page = 'competition' | 'trader' | 'portfolio';
+type Page = 'competition' | 'trader' | 'portfolio' | 'ai-decision';
 
 function App() {
   const { language, setLanguage } = useLanguage();
@@ -33,6 +34,9 @@ function App() {
     }
     if (hash === '#portfolio') {
       return 'portfolio';
+    }
+    if (hash === '#ai-decision') {
+      return 'ai-decision';
     }
     return 'competition';
   };
@@ -49,6 +53,8 @@ function App() {
         setCurrentPage('trader');
       } else if (hash === '#portfolio') {
         setCurrentPage('portfolio');
+      } else if (hash === '#ai-decision') {
+        setCurrentPage('ai-decision');
       } else {
         setCurrentPage('competition');
       }
@@ -65,6 +71,8 @@ function App() {
       window.location.hash = '#trader';
     } else if (page === 'portfolio') {
       window.location.hash = '#portfolio';
+    } else if (page === 'ai-decision') {
+      window.location.hash = '#ai-decision';
     } else {
       window.location.hash = '';
     }
@@ -286,10 +294,20 @@ function App() {
                 >
                   {t('details', language)}
                 </button>
+                <button
+                  onClick={() => navigateToPage('ai-decision')}
+                  className="px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-semibold transition-all"
+                  style={currentPage === 'ai-decision'
+                    ? { background: '#F0B90B', color: '#000' }
+                    : { background: 'transparent', color: '#848E9C' }
+                  }
+                >
+                  🧠 AI Analysis
+                </button>
               </div>
 
-              {/* Trader Selector (only show on trader page) */}
-              {currentPage === 'trader' && traders && traders.length > 0 && (
+              {/* Trader Selector (show on trader and ai-decision pages) */}
+              {(currentPage === 'trader' || currentPage === 'ai-decision') && traders && traders.length > 0 && (
                 <select
                   value={selectedTraderId}
                   onChange={(e) => setSelectedTraderId(e.target.value)}
@@ -353,6 +371,16 @@ function App() {
           <CompetitionPage />
         ) : currentPage === 'portfolio' ? (
           <PortfolioView />
+        ) : currentPage === 'ai-decision' ? (
+          selectedTraderId ? (
+            <AIDecisionView traderId={selectedTraderId} language={language} />
+          ) : (
+            <div className="text-center py-16" style={{ color: '#848E9C' }}>
+              <div className="text-6xl mb-4 opacity-50">🧠</div>
+              <div className="text-lg font-semibold mb-2">Please select a trader</div>
+              <div className="text-sm">Choose a trader from the dropdown above</div>
+            </div>
+          )
         ) : (
           <TraderDetailsPage
             selectedTrader={selectedTrader}

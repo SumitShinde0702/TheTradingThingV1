@@ -136,6 +136,12 @@ func (cfg *Client) CallWithMessages(systemPrompt, userPrompt string) (string, er
 			return "", err
 		}
 
+		// 如果是连接错误，重置HTTP客户端以强制新连接
+		// 这可以避免重用被服务器关闭的stale连接
+		if isRetryableError(err) {
+			cfg.resetConnection()
+		}
+
 		// 重试前等待 - 使用指数退避，但增加初始延迟 (5s, 10s, 20s, 30s)
 		// 给Groq服务器更多时间恢复
 		if attempt < maxRetries {
@@ -229,23 +235,7 @@ func (cfg *Client) callOnce(systemPrompt, userPrompt string) (string, error) {
 	// 发送请求 - 使用连接池和KeepAlive以提高稳定性
 	// 初始化可复用的transport和client（如果还没有）
 	if cfg.transport == nil {
-		cfg.transport = &http.Transport{
-			MaxIdleConns:        10,
-			MaxIdleConnsPerHost: 2,
-			IdleConnTimeout:     90 * time.Second,
-			DisableKeepAlives:   false, // 启用KeepAlive以复用连接
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		}
-		cfg.httpClient = &http.Client{
-			Timeout:   cfg.Timeout,
-			Transport: cfg.transport,
-		}
+		cfg.initConnection()
 	}
 	resp, err := cfg.httpClient.Do(req)
 	if err != nil {
@@ -281,6 +271,47 @@ func (cfg *Client) callOnce(systemPrompt, userPrompt string) (string, error) {
 	}
 
 	return result.Choices[0].Message.Content, nil
+}
+
+// initConnection 初始化HTTP连接（创建新的transport和client）
+func (cfg *Client) initConnection() {
+	// 关闭旧的transport（如果存在）以释放资源
+	if cfg.transport != nil {
+		cfg.transport.CloseIdleConnections()
+	}
+
+	// 创建新的transport，使用较短的KeepAlive以避免stale连接
+	cfg.transport = &http.Transport{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     30 * time.Second, // 减少到30秒，避免重用被关闭的连接
+		DisableKeepAlives:   false,            // 启用KeepAlive以复用连接
+		DialContext: (&net.Dialer{
+			Timeout:   15 * time.Second, // 减少连接超时
+			KeepAlive: 15 * time.Second, // 减少KeepAlive时间，更快检测断开的连接
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// 强制HTTP/1.1（某些代理可能不支持HTTP/2）
+		ForceAttemptHTTP2: false,
+	}
+	cfg.httpClient = &http.Client{
+		Timeout:   cfg.Timeout,
+		Transport: cfg.transport,
+	}
+}
+
+// resetConnection 重置HTTP连接（强制创建新连接）
+func (cfg *Client) resetConnection() {
+	// 关闭所有空闲连接
+	if cfg.transport != nil {
+		cfg.transport.CloseIdleConnections()
+	}
+	// 重新初始化连接
+	cfg.transport = nil
+	cfg.httpClient = nil
+	cfg.initConnection()
 }
 
 // isRetryableError 判断错误是否可重试

@@ -13,10 +13,20 @@ import {
   fetchStatisticsFromSupabase 
 } from './supabase';
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api';
-const API_BASE_MULTI = import.meta.env.VITE_API_URL_MULTI || 'http://localhost:8081/api';
-const API_BASE_ETF = import.meta.env.VITE_API_URL_ETF || 'http://localhost:8082/api';
-const API_BASE_BINANCE = import.meta.env.VITE_API_URL_BINANCE || 'http://localhost:8083/api';
+// Detect if we're accessing via public URL (ngrok, cloudflare, etc.)
+const isPublicAccess = () => {
+  // Check if current hostname is not localhost/127.0.0.1
+  const hostname = window.location.hostname;
+  return hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '';
+};
+
+// Use relative URLs when accessed publicly (via ngrok/cloudflare)
+// Otherwise use direct localhost URLs
+// Note: When public, different backends use different proxy paths which vite routes to correct ports
+const API_BASE = import.meta.env.VITE_API_URL || (isPublicAccess() ? '/api' : 'http://localhost:8080/api');
+const API_BASE_MULTI = import.meta.env.VITE_API_URL_MULTI || (isPublicAccess() ? '/api-multi' : 'http://localhost:8081/api');
+const API_BASE_ETF = import.meta.env.VITE_API_URL_ETF || (isPublicAccess() ? '/api-etf' : 'http://localhost:8082/api');
+const API_BASE_BINANCE = import.meta.env.VITE_API_URL_BINANCE || (isPublicAccess() ? '/api-binance' : 'http://localhost:8083/api');
 const USE_SUPABASE = import.meta.env.VITE_USE_SUPABASE !== 'false'; // Default to true if not set
 
 // Helper to determine which backend to use based on trader ID
