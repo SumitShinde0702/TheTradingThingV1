@@ -4,7 +4,19 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://lia-ai-pwup.onrender.com/api/$1"
+      "destination": "https://trading-system-backend-zdd8.onrender.com/api/$1"
+    },
+    {
+      "source": "/api-binance/(.*)",
+      "destination": "https://trading-system-backend-zdd8.onrender.com/api/$1"
+    },
+    {
+      "source": "/api-multi/(.*)",
+      "destination": "https://trading-system-backend-zdd8.onrender.com/api/$1"
+    },
+    {
+      "source": "/api-etf/(.*)",
+      "destination": "https://trading-system-backend-zdd8.onrender.com/api/$1"
     },
     {
       "source": "/payment/(.*)",
