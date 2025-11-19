@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import { api } from '../lib/api';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 interface PortfolioData {
   total_equity: number;
