@@ -31,3 +31,12 @@ npm-debug.log*
 *.tmp
 *.temp
 
+# Deployment documentation (local only)
+trading-system/DEPLOYMENT_GUIDE.md
+trading-system/QUICK_DEPLOY_CHECKLIST.md
+trading-system/RENDER_BINANCE_DEPLOYMENT.md
+trading-system/RENDER_REPO_TROUBLESHOOTING.md
+trading-system/START_HERE.md
+trading-system/VERCEL_ENV_QUICK.md
+trading-system/VERCEL_ENV_SETUP.md
+

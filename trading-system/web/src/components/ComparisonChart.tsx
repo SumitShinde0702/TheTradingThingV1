@@ -287,7 +287,7 @@ export function ComparisonChart({ traders, timePeriod = '24h', onStatsUpdate }: 
   // 生成唯一的key，当traders变化时会触发重新请求
   const tradersKey = traders.map(t => t.trader_id).sort().join(',');
 
-  const { data: allTraderHistories, isLoading, error } = useSWR(
+  const { data: allTraderHistories, isLoading } = useSWR(
     traders.length > 0 ? `all-equity-histories-${tradersKey}` : null,
     async () => {
       // 并发请求所有trader的历史数据

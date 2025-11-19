@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import useSWR from 'swr';
 import { api } from '../lib/api';
 
@@ -25,7 +25,7 @@ interface PortfolioData {
 
 export function PortfolioView() {
   const [retryCount, setRetryCount] = useState(0);
-  const [lastError, setLastError] = useState<Error | null>(null);
+  const [_lastError, setLastError] = useState<Error | null>(null);
   
   const { data: portfolio, error, isLoading, mutate } = useSWR<PortfolioData>(
     'portfolio',
@@ -54,7 +54,7 @@ export function PortfolioView() {
       shouldRetryOnError: true,
       errorRetryCount: 3,
       errorRetryInterval: 2000,
-      onErrorRetry: (error, key, config, revalidate, { retryCount }) => {
+      onErrorRetry: (_error, _key, _config, revalidate, { retryCount }) => {
         // Don't retry if we've already tried 3 times
         if (retryCount >= 3) return;
         // Retry after 2 seconds

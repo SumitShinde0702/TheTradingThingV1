@@ -7,7 +7,7 @@ interface AIDecisionViewProps {
   language: 'en' | 'zh' | 'ko';
 }
 
-export function AIDecisionView({ traderId, language }: AIDecisionViewProps) {
+export function AIDecisionView({ traderId, language: _language }: AIDecisionViewProps) {
   // Fetch latest decisions (includes cot_trace)
   const { data: decisions, error: decisionsError } = useSWR<DecisionRecord[]>(
     `decisions/latest-${traderId}`,
@@ -29,7 +29,7 @@ export function AIDecisionView({ traderId, language }: AIDecisionViewProps) {
   );
 
   // Fetch account info
-  const { data: account, error: accountError } = useSWR<AccountInfo>(
+  const { data: account } = useSWR<AccountInfo>(
     `account-${traderId}`,
     () => api.getAccount(traderId),
     {
