@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,73 @@ type Config struct {
 	MultiAgent *MultiAgentConfig `json:"multi_agent,omitempty"`
 }
 
+// applyEnvOverrides replaces any placeholder values (e.g., $ENV or ${ENV})
+// with their actual environment variable values before validation.
+func (c *Config) applyEnvOverrides() {
+	for i := range c.Traders {
+		trader := &c.Traders[i]
+		trader.BinanceAPIKey = resolveEnvPlaceholder(trader.BinanceAPIKey)
+		trader.BinanceSecretKey = resolveEnvPlaceholder(trader.BinanceSecretKey)
+		trader.HyperliquidPrivateKey = resolveEnvPlaceholder(trader.HyperliquidPrivateKey)
+		trader.HyperliquidWalletAddr = resolveEnvPlaceholder(trader.HyperliquidWalletAddr)
+		trader.AsterUser = resolveEnvPlaceholder(trader.AsterUser)
+		trader.AsterSigner = resolveEnvPlaceholder(trader.AsterSigner)
+		trader.AsterPrivateKey = resolveEnvPlaceholder(trader.AsterPrivateKey)
+		trader.QwenKey = resolveEnvPlaceholder(trader.QwenKey)
+		trader.DeepSeekKey = resolveEnvPlaceholder(trader.DeepSeekKey)
+		trader.GroqKey = resolveEnvPlaceholder(trader.GroqKey)
+		trader.CustomAPIURL = resolveEnvPlaceholder(trader.CustomAPIURL)
+		trader.CustomAPIKey = resolveEnvPlaceholder(trader.CustomAPIKey)
+		trader.CustomModelName = resolveEnvPlaceholder(trader.CustomModelName)
+	}
+
+	c.CoinPoolAPIURL = resolveEnvPlaceholder(c.CoinPoolAPIURL)
+	c.OITopAPIURL = resolveEnvPlaceholder(c.OITopAPIURL)
+	c.SupabaseURL = resolveEnvPlaceholder(c.SupabaseURL)
+	c.SupabaseKey = resolveEnvPlaceholder(c.SupabaseKey)
+	c.SupabaseDatabaseURL = resolveEnvPlaceholder(c.SupabaseDatabaseURL)
+
+	if c.MultiAgent != nil {
+		for i := range c.MultiAgent.Agents {
+			agent := &c.MultiAgent.Agents[i]
+			agent.APIKey = resolveEnvPlaceholder(agent.APIKey)
+		}
+	}
+}
+
+// resolveEnvPlaceholder returns the environment variable value referenced by placeholder strings
+// such as $ENV_VAR, ${ENV_VAR}, or env:ENV_VAR. If no placeholder syntax is present, the original
+// value is returned unchanged. If the placeholder is present but the environment variable is not set,
+// an empty string is returned so validation can fail informatively.
+func resolveEnvPlaceholder(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value
+	}
+
+	var key string
+	switch {
+	case strings.HasPrefix(trimmed, "env:"):
+		key = strings.TrimSpace(trimmed[4:])
+	case strings.HasPrefix(trimmed, "${") && strings.HasSuffix(trimmed, "}"):
+		key = strings.TrimSpace(trimmed[2 : len(trimmed)-1])
+	case strings.HasPrefix(trimmed, "$"):
+		key = strings.TrimSpace(trimmed[1:])
+	default:
+		return value
+	}
+
+	if key == "" {
+		return value
+	}
+
+	if envVal, ok := os.LookupEnv(key); ok {
+		return envVal
+	}
+
+	return ""
+}
+
 // MultiAgentConfig is imported from multi-agent package
 // We define it here to avoid circular imports
 type MultiAgentConfig struct {
@@ -110,6 +178,9 @@ func LoadConfig(filename string) (*Config, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	// Resolve environment variable placeholders before validation
+	config.applyEnvOverrides()
 
 	// Set default values: if use_default_coins is not set (false) and coin_pool_api_url is not configured, default to using default coin list
 	if !config.UseDefaultCoins && config.CoinPoolAPIURL == "" {

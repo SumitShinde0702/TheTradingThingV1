@@ -6,9 +6,9 @@
             "enabled": true,
             "ai_model": "groq",
             "exchange": "binance",
-            "binance_api_key": "10dhXhOO12vlwKNZaPoUm6SOMUqrLxucS97zaahd9MWbMuyCBZVDp6W6QpGDtpZA",
-            "binance_secret_key": "2uboI4eNrrNjCHfVDtvz104W6DnoLSbGee3BC7Ltm64fGFQ24B3kiAbL8CkfPNaa",
-            "groq_key": "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",
+            "binance_api_key": "${BINANCE_API_KEY}",
+            "binance_secret_key": "${BINANCE_SECRET_KEY}",
+            "groq_key": "${GROQ_API_KEY}",
             "groq_model": "llama-3.1-8b-instant",
             "initial_balance": 63.00,
             "scan_interval_minutes": 15
@@ -19,9 +19,9 @@
             "enabled": true,
             "ai_model": "groq",
             "exchange": "binance",
-            "binance_api_key": "10dhXhOO12vlwKNZaPoUm6SOMUqrLxucS97zaahd9MWbMuyCBZVDp6W6QpGDtpZA",
-            "binance_secret_key": "2uboI4eNrrNjCHfVDtvz104W6DnoLSbGee3BC7Ltm64fGFQ24B3kiAbL8CkfPNaa",
-            "groq_key": "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",
+            "binance_api_key": "${BINANCE_API_KEY}",
+            "binance_secret_key": "${BINANCE_SECRET_KEY}",
+            "groq_key": "${GROQ_API_KEY}",
             "groq_model": "llama-3.3-70b-versatile",
             "initial_balance": 63.00,
             "scan_interval_minutes": 20
@@ -32,9 +32,9 @@
             "enabled": true,
             "ai_model": "deepseek",
             "exchange": "binance",
-            "binance_api_key": "10dhXhOO12vlwKNZaPoUm6SOMUqrLxucS97zaahd9MWbMuyCBZVDp6W6QpGDtpZA",
-            "binance_secret_key": "2uboI4eNrrNjCHfVDtvz104W6DnoLSbGee3BC7Ltm64fGFQ24B3kiAbL8CkfPNaa",
-            "deepseek_key": "sk-e2b7b99c7eef4777b2380c9dd334b2cf",
+            "binance_api_key": "${BINANCE_API_KEY}",
+            "binance_secret_key": "${BINANCE_SECRET_KEY}",
+            "deepseek_key": "${DEEPSEEK_API_KEY}",
             "initial_balance": 37.00,
             "scan_interval_minutes": 10
         }

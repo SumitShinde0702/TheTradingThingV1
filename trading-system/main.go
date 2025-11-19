@@ -2,16 +2,18 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"lia/api"
 	"lia/config"
 	"lia/manager"
 	"lia/pool"
+	"log"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -20,6 +22,15 @@ func main() {
 	fmt.Println("║              OpenAI vs Qwen Competition                    ║")
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
 	fmt.Println()
+
+	// Load .env if present (silently ignore if missing)
+	if err := godotenv.Load(); err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("ℹ️  No .env file found, continuing with OS environment variables")
+		} else {
+			log.Printf("⚠️  Failed to load .env file: %v", err)
+		}
+	}
 
 	// Load configuration file
 	configFile := "config.json"
@@ -86,7 +97,7 @@ func main() {
 			cfg.MaxDrawdown,
 			cfg.StopTradingMinutes,
 			cfg.Leverage, // Pass leverage configuration
-			cfg, // Pass global config for Supabase settings
+			cfg,          // Pass global config for Supabase settings
 		)
 		if err != nil {
 			log.Fatalf("❌ Failed to initialize trader: %v", err)

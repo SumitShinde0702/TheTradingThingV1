@@ -29,9 +29,9 @@ type Client struct {
 	BaseURL    string
 	Model      string
 	Timeout    time.Duration
-	UseFullURL bool // 是否使用完整URL（不添加/chat/completions）
+	UseFullURL bool            // 是否使用完整URL（不添加/chat/completions）
 	transport  *http.Transport // 可复用的HTTP传输层，用于连接池
-	httpClient *http.Client     // 可复用的HTTP客户端
+	httpClient *http.Client    // 可复用的HTTP客户端
 }
 
 func New() *Client {
@@ -40,7 +40,7 @@ func New() *Client {
 		Provider: ProviderGroq,
 		BaseURL:  "https://api.groq.com/openai/v1",
 		Model:    "llama-3.1-70b-versatile", // Groq's default fast model
-		Timeout:  120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
+		Timeout:  120 * time.Second,         // 增加到120秒，因为AI需要分析大量数据
 	}
 	return &defaultClient
 }
@@ -189,7 +189,7 @@ func (cfg *Client) callOnce(systemPrompt, userPrompt string) (string, error) {
 	requestBody := map[string]interface{}{
 		"model":       cfg.Model,
 		"messages":    messages,
-		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
+		"temperature": 0.5,  // 降低temperature以提高JSON格式稳定性
 		"max_tokens":  4000, // 增加token限制以支持完整的chain of thought + JSON响应
 	}
 

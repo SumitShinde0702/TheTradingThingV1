@@ -6,7 +6,7 @@
         "enabled": true,
         "ai_model": "groq",
         "exchange": "paper",
-        "groq_key": "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",
+        "groq_key": "${GROQ_API_KEY}",
         "groq_model": "openai/gpt-oss-120b",
         "initial_balance": 10000.0,
         "scan_interval_minutes": 1
@@ -17,7 +17,7 @@
         "enabled": true,
         "ai_model": "groq",
         "exchange": "paper",
-        "groq_key": "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",
+        "groq_key": "${GROQ_API_KEY}",
         "groq_model": "qwen/qwen3-32b",
         "initial_balance": 10000.0,
         "scan_interval_minutes": 1
@@ -28,7 +28,7 @@
         "enabled": true,
         "ai_model": "groq",
         "exchange": "paper",
-        "groq_key": "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",
+        "groq_key": "${GROQ_API_KEY}",
         "groq_model": "llama-3.1-8b-instant",
         "initial_balance": 10000.0,
         "scan_interval_minutes": 1
