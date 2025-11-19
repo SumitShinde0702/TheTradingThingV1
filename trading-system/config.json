@@ -1,0 +1,101 @@
+{
+    "traders": [
+      {
+        "id": "openai_trader_multi",
+        "name": "OpenAI Trader (Multi-Agent)",
+        "enabled": true,
+        "ai_model": "groq",
+        "exchange": "paper",
+        "groq_key": "${GROQ_API_KEY}",
+        "groq_model": "openai/gpt-oss-120b",
+        "initial_balance": 10000.0,
+        "scan_interval_minutes": 15
+      },
+      {
+        "id": "qwen_trader_multi",
+        "name": "Qwen Trader (Multi-Agent)",
+        "enabled": true,
+        "ai_model": "groq",
+        "exchange": "paper",
+        "groq_key": "${GROQ_API_KEY}",
+        "groq_model": "qwen/qwen3-32b",
+        "initial_balance": 10000.0,
+        "scan_interval_minutes": 15
+      },
+      {
+        "id": "deepseek_trader_paper",
+        "name": "DeepSeek Strategist (Paper)",
+        "enabled": true,
+        "ai_model": "deepseek",
+        "exchange": "paper",
+        "deepseek_key": "${DEEPSEEK_API_KEY}",
+        "initial_balance": 10000.0,
+        "scan_interval_minutes": 10
+      }
+    ],
+    "leverage": {
+      "btc_eth_leverage": 10,
+      "altcoin_leverage": 10
+    },
+    "use_default_coins": true,
+    "default_coins": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "HYPEUSDT"
+    ],
+    "coin_pool_api_url": "",
+    "oi_top_api_url": "",
+    "api_server_port": 8081,
+    "max_daily_loss": 10.0,
+    "max_drawdown": 20.0,
+    "stop_trading_minutes": 60,
+    "auto_take_profit_pct": 0,
+    "use_supabase": false,
+    "supabase_url": "",
+    "supabase_key": "",
+    "supabase_database_url": "",
+    "supabase_schema": "public",
+    "multi_agent": {
+      "enabled": true,
+      "consensus_mode": "best",
+      "fast_first": true,
+      "min_agents": 2,
+      "max_wait_time": 15,
+      "agents": [
+        {
+          "id": "agent_1",
+          "name": "Technical Analysis Agent",
+          "model": "groq",
+          "api_key": "${GROQ_API_KEY}",
+          "groq_model": "openai/gpt-oss-120b",
+          "role": "technical",
+          "weight": 0.4
+        },
+        {
+          "id": "agent_2",
+          "name": "Momentum Agent",
+          "model": "groq",
+          "api_key": "${GROQ_API_KEY}",
+          "groq_model": "qwen/qwen3-32b",
+          "role": "momentum",
+          "weight": 0.3
+        },
+        {
+          "id": "agent_3",
+          "name": "Risk Management Agent",
+          "model": "groq",
+          "api_key": "${GROQ_API_KEY}",
+          "groq_model": "openai/gpt-oss-120b",
+          "role": "risk",
+          "weight": 0.3
+        }
+      ]
+    }
+  }
+  
+  

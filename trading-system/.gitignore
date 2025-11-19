@@ -28,7 +28,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
-config.json
 *.key
 *.secret
 *_api_key*
