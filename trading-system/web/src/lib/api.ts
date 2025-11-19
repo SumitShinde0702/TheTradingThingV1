@@ -84,13 +84,20 @@ export const api = {
     
     const results = await Promise.all(promises);
     const allTraders: any[] = [];
+    const seenTraderIds = new Set<string>();
     
-    // Combine traders from all backends
+    // Combine traders from all backends, deduplicating by trader_id
     for (const res of results) {
       if (res && res.ok) {
         const data = await res.json();
         if (data.traders && Array.isArray(data.traders)) {
-          allTraders.push(...data.traders);
+          for (const trader of data.traders) {
+            // Only add if we haven't seen this trader_id before
+            if (trader.trader_id && !seenTraderIds.has(trader.trader_id)) {
+              seenTraderIds.add(trader.trader_id);
+              allTraders.push(trader);
+            }
+          }
         }
       }
     }
@@ -148,12 +155,19 @@ export const api = {
     
     const results = await Promise.all(promises);
     const allTraders: TraderInfo[] = [];
+    const seenTraderIds = new Set<string>();
     
-    // Combine traders from all backends
+    // Combine traders from all backends, deduplicating by trader_id
     for (const res of results) {
       if (res && res.ok) {
         const traders = await res.json();
-        allTraders.push(...traders);
+        for (const trader of traders) {
+          // Only add if we haven't seen this trader_id before
+          if (trader.trader_id && !seenTraderIds.has(trader.trader_id)) {
+            seenTraderIds.add(trader.trader_id);
+            allTraders.push(trader);
+          }
+        }
       }
     }
     
