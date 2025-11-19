@@ -4,7 +4,6 @@ import { api } from './lib/api';
 import { EquityChart } from './components/EquityChart';
 import { CompetitionPage } from './components/CompetitionPage';
 import { PortfolioView } from './components/PortfolioView';
-import { ExperimentalDashboard } from './components/ExperimentalDashboard';
 import AILearning from './components/AILearning';
 import { TradingSignal } from './components/TradingSignal';
 import { AIDecisionView } from './components/AIDecisionView';
@@ -23,8 +22,7 @@ import type {
 type Page = 'competition' | 'trader' | 'portfolio' | 'ai-decision';
 
 function App() {
-  const { language, setLanguage } = useLanguage();
-  const [experimentalMode, setExperimentalMode] = useState(false);
+  const { language } = useLanguage();
 
   // 从URL hash读取初始页面状态（支持刷新保持页面）
   const getInitialPage = (): Page => {
@@ -182,8 +180,8 @@ function App() {
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
               <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center overflow-hidden">
                 <img 
-                  src="/assets/logos/LiaLogo.png" 
-                  alt="Lia Logo" 
+                  src="/assets/logos/image.png" 
+                  alt="AlphaNet Logo" 
                   className="w-full h-full object-cover rounded-full"
                 />
               </div>
@@ -199,69 +197,6 @@ function App() {
 
             {/* Right: Controls - Wrap on mobile */}
             <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
-              {/* Experimental Mode Toggle */}
-              <button
-                onClick={() => setExperimentalMode(!experimentalMode)}
-                className="px-2 sm:px-4 py-1.5 sm:py-2 rounded text-xs sm:text-sm font-semibold transition-all"
-                style={experimentalMode ? {
-                  background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.4) 0%, rgba(99, 102, 241, 0.4) 100%)',
-                  border: '1px solid rgba(139, 92, 246, 0.6)',
-                  color: '#C084FC',
-                } : {
-                  background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%)',
-                  border: '1px solid rgba(139, 92, 246, 0.4)',
-                  color: '#A78BFA',
-                }}
-                onMouseEnter={(e) => {
-                  if (!experimentalMode) {
-                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(99, 102, 241, 0.3) 100%)';
-                    e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.6)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!experimentalMode) {
-                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%)';
-                    e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.4)';
-                  }
-                }}
-              >
-                {experimentalMode ? '⬅ NORMAL' : '⚡ EXPERIMENTAL'}
-              </button>
-
-              {/* Language Toggle */}
-              <div className="flex gap-0.5 sm:gap-1 rounded p-0.5 sm:p-1" style={{ background: '#1E2329' }}>
-                <button
-                  onClick={() => setLanguage('en')}
-                  className="px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-semibold transition-all"
-                  style={language === 'en'
-                    ? { background: '#F0B90B', color: '#000' }
-                    : { background: 'transparent', color: '#848E9C' }
-                  }
-                >
-                  EN
-                </button>
-                <button
-                  onClick={() => setLanguage('zh')}
-                  className="px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-semibold transition-all"
-                  style={language === 'zh'
-                    ? { background: '#F0B90B', color: '#000' }
-                    : { background: 'transparent', color: '#848E9C' }
-                  }
-                >
-                  中文
-                </button>
-                <button
-                  onClick={() => setLanguage('ko')}
-                  className="px-2 sm:px-3 py-1 sm:py-1.5 rounded text-xs font-semibold transition-all"
-                  style={language === 'ko'
-                    ? { background: '#F0B90B', color: '#000' }
-                    : { background: 'transparent', color: '#848E9C' }
-                  }
-                >
-                  한국어
-                </button>
-              </div>
-
               {/* Page Toggle */}
               <div className="flex gap-0.5 sm:gap-1 rounded p-0.5 sm:p-1" style={{ background: '#1E2329' }}>
                 <button
@@ -365,9 +300,7 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-[1920px] mx-auto px-6 py-6" style={{ position: 'relative', zIndex: 1 }}>
-        {experimentalMode ? (
-          <ExperimentalDashboard onExit={() => setExperimentalMode(false)} />
-        ) : currentPage === 'competition' ? (
+        {currentPage === 'competition' ? (
           <CompetitionPage />
         ) : currentPage === 'portfolio' ? (
           <PortfolioView />

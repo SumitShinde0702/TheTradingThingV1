@@ -48,7 +48,6 @@ function getTraderType(traderId: string, traderName: string): 'paper' | 'real' |
 export function CompetitionPage() {
   const { language } = useLanguage();
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('24h');
-  const [filter, setFilter] = useState<'all' | 'paper' | 'real' | 'etf'>('all');
   const [chartStats, setChartStats] = useState<{
     displayDataLength: number;
     filteredDataLength: number;
@@ -91,76 +90,16 @@ export function CompetitionPage() {
     );
   }
 
-  // Filter traders based on selected filter
-  let filteredTraders = competition.traders;
-  if (filter !== 'all') {
-    filteredTraders = competition.traders.filter(trader => {
-      const type = getTraderType(trader.trader_id, trader.trader_name);
-      return type === filter;
-    });
-  }
+  // Show all traders (no filtering)
+  const filteredTraders = competition.traders;
 
   // 按收益率排序
   const sortedTraders = [...filteredTraders].sort(
     (a, b) => b.total_pnl_pct - a.total_pnl_pct
   );
 
-  // Count traders by type
-  const traderCounts = {
-    all: competition.traders.length,
-    paper: competition.traders.filter(t => getTraderType(t.trader_id, t.trader_name) === 'paper').length,
-    real: competition.traders.filter(t => getTraderType(t.trader_id, t.trader_name) === 'real').length,
-    etf: competition.traders.filter(t => getTraderType(t.trader_id, t.trader_name) === 'etf').length,
-  };
-
   return (
     <div className="space-y-5 animate-fade-in">
-      {/* Filter Tabs */}
-      <div className="binance-card p-3 sm:p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold" style={{ color: '#848E9C' }}>Filter:</span>
-          <button
-            onClick={() => setFilter('all')}
-            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
-            style={filter === 'all'
-              ? { background: '#F0B90B', color: '#000' }
-              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
-            }
-          >
-            All ({traderCounts.all})
-          </button>
-          <button
-            onClick={() => setFilter('paper')}
-            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
-            style={filter === 'paper'
-              ? { background: '#F0B90B', color: '#000' }
-              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
-            }
-          >
-            📊 Paper ({traderCounts.paper})
-          </button>
-          <button
-            onClick={() => setFilter('etf')}
-            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
-            style={filter === 'etf'
-              ? { background: '#F0B90B', color: '#000' }
-              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
-            }
-          >
-            📈 ETF Portfolio ({traderCounts.etf})
-          </button>
-          <button
-            onClick={() => setFilter('real')}
-            className="px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-all"
-            style={filter === 'real'
-              ? { background: 'linear-gradient(135deg, #F6465D 0%, #FF6B6B 100%)', color: '#FFF', border: '1px solid #F6465D' }
-              : { background: '#1E2329', color: '#848E9C', border: '1px solid #2B3139' }
-            }
-          >
-            💰 Real Trading ({traderCounts.real})
-          </button>
-        </div>
-      </div>
 
       {/* Left/Right Split: Performance Chart + Leaderboard */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-5">
@@ -170,11 +109,6 @@ export function CompetitionPage() {
             <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
               <h2 className="text-base sm:text-lg font-bold" style={{ color: '#EAECEF' }}>
                 {t('performanceComparison', language)}
-                {filter !== 'all' && (
-                  <span className="ml-2 text-xs font-normal" style={{ color: '#848E9C' }}>
-                    ({filter === 'real' ? 'Real Trading' : filter === 'etf' ? 'ETF Portfolio' : 'Paper Trading'})
-                  </span>
-                )}
               </h2>
               <span className="text-xs" style={{ color: '#848E9C' }}>
                 ({Intl.DateTimeFormat().resolvedOptions().timeZone})
@@ -202,7 +136,7 @@ export function CompetitionPage() {
           <div className="space-y-3">
             {sortedTraders.length === 0 ? (
               <div className="text-center py-8 text-sm" style={{ color: '#848E9C' }}>
-                No traders found for selected filter
+                No traders found
               </div>
             ) : sortedTraders.map((trader, index) => {
               const isLeader = index === 0;

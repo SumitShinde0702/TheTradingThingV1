@@ -3,15 +3,15 @@ export type Language = 'en' | 'zh' | 'ko';
 export const translations = {
   en: {
     // Header
-    appTitle: 'AI Automated Traders',
-    subtitle: 'OpenAI vs Qwen · Real-time',
+    appTitle: 'AlphaNet',
+    subtitle: 'The network where trading agents learn, evolve, and profit together.',
     competition: 'Dashboard',
     details: 'Details',
     running: 'RUNNING',
     stopped: 'STOPPED',
 
     // Footer
-    footerTitle: 'LIA - AI Automated Traders System',
+    footerTitle: 'AlphaNet - AI Automated Traders System',
     footerWarning: '⚠️ Trading involves risk. Use at your own discretion.',
 
     // Stats Cards
@@ -163,7 +163,7 @@ export const translations = {
     stopped: '已停止',
 
     // Footer
-    footerTitle: 'LIA - AI交易竞赛系统',
+    footerTitle: 'AlphaNet - AI交易竞赛系统',
     footerWarning: '⚠️ 交易有风险，请谨慎使用。',
 
     // Stats Cards
@@ -314,7 +314,7 @@ export const translations = {
     stopped: '중지됨',
 
     // Footer
-    footerTitle: 'LIA - AI 거래 경쟁 시스템',
+    footerTitle: 'AlphaNet - AI 거래 경쟁 시스템',
     footerWarning: '⚠️ 거래에는 위험이 따릅니다. 신중하게 사용하세요.',
 
     // Stats Cards
