@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { CompetitionData } from '../types';
 import { ComparisonChart, TimePeriodDropdown, StatsCards, type TimePeriod } from './ComparisonChart';
@@ -8,6 +8,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
 import { getTraderColor } from '../utils/traderColors';
 import { ModelLogo } from './ModelLogo';
+import { PurchaseAgentButton } from './PurchaseAgentButton';
 
 // Helper function to clean trader name - removes "Trader"
 function cleanTraderName(name: string): string {
@@ -54,6 +55,8 @@ export function CompetitionPage() {
     currentGap: number;
     lastUpdatedLabel: string;
   } | null>(null);
+  const [purchaseTraderId, setPurchaseTraderId] = useState<string | undefined>(undefined);
+
   const { data: competition, error: competitionError, isLoading: competitionLoading } = useSWR<CompetitionData>(
     'competition',
     api.getCompetition,
@@ -64,10 +67,27 @@ export function CompetitionPage() {
     }
   );
 
+  const filteredTraders = competition?.traders ?? [];
+  const realOrCopyTraders = filteredTraders.filter((trader) => trader.trader_id && trader.trader_name);
+
+  useEffect(() => {
+    if (realOrCopyTraders.length > 0) {
+      const hasSelection = purchaseTraderId && realOrCopyTraders.some((t) => t.trader_id === purchaseTraderId);
+      if (!hasSelection) {
+        setPurchaseTraderId(realOrCopyTraders[0].trader_id);
+      }
+    } else if (purchaseTraderId) {
+      setPurchaseTraderId(undefined);
+    }
+  }, [realOrCopyTraders, purchaseTraderId]);
+
+  const purchaseTrader =
+    realOrCopyTraders.find((trader) => trader.trader_id === purchaseTraderId) || realOrCopyTraders[0];
+
   // Check if server is unreachable or deploying
   const isServerUnreachable = competitionError !== undefined || (competitionLoading && !competition);
 
-  if (!competition || !competition.traders) {
+  if (!competition || filteredTraders.length === 0) {
     return (
       <div className="space-y-6">
         <div className="binance-card p-8 animate-pulse">
@@ -90,9 +110,6 @@ export function CompetitionPage() {
     );
   }
 
-  // Show all traders (no filtering)
-  const filteredTraders = competition.traders;
-
   // 按收益率排序
   const sortedTraders = [...filteredTraders].sort(
     (a, b) => b.total_pnl_pct - a.total_pnl_pct
@@ -100,6 +117,35 @@ export function CompetitionPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
+
+      {/* Hedera Purchase Section */}
+      {purchaseTrader && (
+        <div className="space-y-3">
+          <div className="binance-card p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-2 w-full md:max-w-xs">
+              <label className="text-xs font-semibold" style={{ color: '#848E9C' }}>
+                {t('purchaseSelectTrader', language)}
+              </label>
+              <select
+                value={purchaseTraderId}
+                onChange={(e) => setPurchaseTraderId(e.target.value)}
+                className="rounded px-3 py-2 text-sm font-medium"
+                style={{ background: '#1E2329', border: '1px solid #2B3139', color: '#EAECEF' }}
+              >
+                {realOrCopyTraders.map((trader) => (
+                  <option key={trader.trader_id} value={trader.trader_id}>
+                    {trader.trader_name} ({trader.ai_model?.toUpperCase() || 'AI'})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="text-xs" style={{ color: '#848E9C' }}>
+              {t('purchaseReminder', language)}
+            </div>
+          </div>
+          <PurchaseAgentButton traderName={purchaseTrader.trader_name} traderId={purchaseTrader.trader_id} language={language} />
+        </div>
+      )}
 
       {/* Left/Right Split: Performance Chart + Leaderboard */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-5">

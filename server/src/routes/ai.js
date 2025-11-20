@@ -206,7 +206,7 @@ export function createAIRoutes(agentManager) {
    * POST /api/ai/purchase
    */
   router.post("/purchase", async (req, res) => {
-    const { query } = req.body;
+    const { query, traderId: selectedTraderId, traderName: selectedTraderName } = req.body || {};
 
     console.log(`[AI-PURCHASE] ==========================================`);
     console.log(`[AI-PURCHASE] 🚀 Starting AI agent purchase`);
@@ -237,11 +237,43 @@ export function createAIRoutes(agentManager) {
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
 
+    const targetTraderLabel = selectedTraderName || selectedTraderId || "selected trader";
+    const signalEndpointHint = selectedTraderId
+      ? `${TRADING_API_URL}/api/decisions/latest?trader_id=${selectedTraderId}`
+      : `${TRADING_API_URL}/api/decisions/latest?trader_id=<TRADER_ID>`;
+
     // Helper to send SSE events
     const sendEvent = (type, data) => {
       console.log(`[AI-PURCHASE] 📤 SSE Event [${type}]:`, JSON.stringify(data));
       res.write(`event: ${type}\n`);
       res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const isConnectionResetError = (error) => {
+      if (!error) return false;
+      if (error.code === "ECONNRESET") return true;
+      const message =
+        error.message ||
+        error?.cause?.message ||
+        error?.response?.data?.error ||
+        "";
+      return /ECONNRESET|socket hang up|ECONNABORTED/i.test(message);
+    };
+
+    const appendSignalContext = (baseMessage) => {
+      const contextLines = [
+        "Trading Context:",
+        `- Trader: ${targetTraderLabel}`,
+        selectedTraderId
+          ? `- Trader ID: ${selectedTraderId}`
+          : "- Trader ID was not provided. Use the trader_id from the user query.",
+        `- Fetch the live Binance futures decision JSON from: ${signalEndpointHint}`,
+        "- This system trades crypto perpetual futures only (pairs like BTCUSDT, SOLUSDT, ETHUSDT).",
+        "- NEVER mention equities or stocks (e.g., AAPL, GOOG).",
+        "- Include the exact JSON payload you retrieved in your response.",
+      ];
+      return `${baseMessage}\n\n${contextLines.join("\n")}`;
     };
 
     try {
@@ -267,6 +299,12 @@ export function createAIRoutes(agentManager) {
           console.log(`[AI-PURCHASE] 🛠️  [discover_agents] Starting...`);
           console.log(`[AI-PURCHASE]    Input: ${JSON.stringify({ capabilities, limit })}`);
           
+          sendEvent("workflow_step", {
+            step: "discovery",
+            status: "starting",
+            message: "Discovering ERC-8004 agents"
+          });
+
           sendEvent("tool", {
             tool: "discover_agents",
             status: "starting",
@@ -295,6 +333,12 @@ export function createAIRoutes(agentManager) {
                   tool: "discover_agents",
                   status: "completed",
                   result: { count: agents.length, agents, source: "local" }
+                });
+
+                sendEvent("workflow_step", {
+                  step: "discovery",
+                  status: "completed",
+                  message: `Agent discovery complete via local registry (${agents.length} agent${agents.length === 1 ? "" : "s"})`
                 });
 
                 return JSON.stringify({
@@ -335,6 +379,12 @@ export function createAIRoutes(agentManager) {
                 result: { count: agents.length, agents, source: "blockchain" }
               });
 
+                sendEvent("workflow_step", {
+                  step: "discovery",
+                  status: "completed",
+                  message: `Agent discovery complete via ERC-8004 (${agents.length} agent${agents.length === 1 ? "" : "s"})`
+                });
+
               return JSON.stringify({
                 success: true,
                 count: agents.length,
@@ -355,6 +405,11 @@ export function createAIRoutes(agentManager) {
                   message: "Blockchain rate limit exceeded, using local agents",
                   error: blockchainError.message
                 });
+                sendEvent("workflow_step", {
+                  step: "discovery",
+                  status: "warning",
+                  message: "ERC-8004 discovery rate-limited. Using local cache."
+                });
                 
                 // Return empty agents list - agent will need to work with what's available
                 return JSON.stringify({
@@ -374,6 +429,11 @@ export function createAIRoutes(agentManager) {
               tool: "discover_agents",
               status: "error",
               error: error.message
+            });
+            sendEvent("workflow_step", {
+              step: "discovery",
+              status: "error",
+              message: error.message
             });
             return JSON.stringify({
               success: false,
@@ -545,6 +605,12 @@ export function createAIRoutes(agentManager) {
           console.log(`[AI-PURCHASE] 🛠️  [process_payment] Starting...`);
           console.log(`[AI-PURCHASE]    Model: ${modelName}`);
           
+          sendEvent("workflow_step", {
+            step: "payment",
+            status: "starting",
+            message: `Processing payment for ${modelName}`
+          });
+          
           sendEvent("tool", {
             tool: "process_payment",
             status: "starting",
@@ -564,6 +630,12 @@ export function createAIRoutes(agentManager) {
               const { txHash, hashscanUrl } = response.data.payment;
               console.log(`[AI-PURCHASE]    ✅ Payment processed! TxHash: ${txHash}`);
               
+              sendEvent("workflow_step", {
+                step: "payment",
+                status: "completed",
+                message: `Payment completed for ${modelName}: ${txHash.substring(0, 16)}...`
+              });
+              
               sendEvent("tool", {
                 tool: "process_payment",
                 status: "completed",
@@ -582,6 +654,11 @@ export function createAIRoutes(agentManager) {
             }
           } catch (error) {
             console.error(`[AI-PURCHASE]    ❌ Error: ${error.message}`);
+            sendEvent("workflow_step", {
+              step: "payment",
+              status: "error",
+              message: `Payment failed for ${modelName}: ${error.message}`
+            });
             sendEvent("tool", {
               tool: "process_payment",
               status: "error",
@@ -647,10 +724,7 @@ export function createAIRoutes(agentManager) {
       const sendMessageToAgentTool = tool(
         async (input) => {
           const { agentId, message, contextId: providedContextId } = input;
-          console.log(`[AI-PURCHASE] 🛠️  [send_message_to_agent] Starting...`);
-          console.log(`[AI-PURCHASE]    Message: ${message}`);
-          console.log(`[AI-PURCHASE]    Input: { agentId: "${agentId}", message: "${message.substring(0, 50)}..." }`);
-          
+
           // Determine workflow phase based on agent name
           let phase = "general";
           const agentIdLower = agentId.toLowerCase();
@@ -661,18 +735,29 @@ export function createAIRoutes(agentManager) {
           } else if (agentIdLower.includes("tradeexecutor") || agentIdLower.includes("executor")) {
             phase = "execution";
           }
+
+          let outgoingMessage = message;
+          if (phase === "signal") {
+            outgoingMessage = appendSignalContext(message);
+          }
+
+          console.log(`[AI-PURCHASE] 🛠️  [send_message_to_agent] Starting...`);
+          console.log(`[AI-PURCHASE]    Message: ${outgoingMessage}`);
+          console.log(
+            `[AI-PURCHASE]    Input: { agentId: "${agentId}", message: "${outgoingMessage.substring(0, 50)}..." }`
+          );
           
           sendEvent("tool", {
             tool: "send_message_to_agent",
             status: "starting",
-            input: { agentId, message: message.substring(0, 100) }
+            input: { agentId, message: outgoingMessage.substring(0, 100) }
           });
           
           // Send agent conversation event
           sendEvent("agent_conversation", {
             from: "Orchestrator",
             to: agentId,
-            message: message.substring(0, 200),
+            message: outgoingMessage.substring(0, 200),
             phase: phase
           });
           
@@ -750,7 +835,7 @@ export function createAIRoutes(agentManager) {
               message: {
                 kind: "message",
                 role: "user",
-                parts: [{ kind: "text", text: message }],
+                parts: [{ kind: "text", text: outgoingMessage }],
                 messageId: messageId,
                 contextId: contextId,
                 metadata: {
@@ -766,8 +851,42 @@ export function createAIRoutes(agentManager) {
               },
             };
 
-            const httpResponse = await axios.post(
-              a2aEndpoint,
+            const postToAgent = async (payload, axiosOptions = {}) => {
+              const maxAttempts = 2;
+              for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                  return await axios.post(
+                    a2aEndpoint,
+                    payload,
+                    {
+                      timeout: 45000,
+                      ...axiosOptions,
+                    }
+                  );
+                } catch (error) {
+                  if (isConnectionResetError(error) && attempt < maxAttempts) {
+                    const retryMsg = `Agent connection reset during ${phase} phase. Retrying (${attempt}/${maxAttempts - 1})...`;
+                    console.warn(`[AI-PURCHASE] ⚠️ ${retryMsg}`);
+                    sendEvent("status", {
+                      type: "retrying",
+                      message: retryMsg
+                    });
+                    if (phase !== "general") {
+                      sendEvent("workflow_step", {
+                        step: phase,
+                        status: "warning",
+                        message: retryMsg
+                      });
+                    }
+                    await sleep(1200 * attempt);
+                    continue;
+                  }
+                  throw error;
+                }
+              }
+            };
+
+            const httpResponse = await postToAgent(
               {
                 jsonrpc: "2.0",
                 id: messageId,
@@ -841,8 +960,7 @@ export function createAIRoutes(agentManager) {
                   },
                 };
 
-                const retryResponse = await axios.post(
-                  a2aEndpoint,
+                const retryResponse = await postToAgent(
                   {
                     jsonrpc: "2.0",
                     id: messageId,
@@ -983,13 +1101,29 @@ export function createAIRoutes(agentManager) {
               console.error(`[AI-PURCHASE]    Status: ${error.response.status}`);
               console.error(`[AI-PURCHASE]    Data: ${JSON.stringify(error.response.data)}`);
             }
+
+            const connectionReset = isConnectionResetError(error);
+            const friendlyMessage = connectionReset
+              ? `Agent connection reset during ${phase} phase. Please retry once the agents are reachable.`
+              : (error.response?.data?.error || error.message || "Unknown error");
+
+            if (phase !== "general") {
+              sendEvent("workflow_step", {
+                step: phase,
+                status: connectionReset ? "warning" : "error",
+                message: friendlyMessage
+              });
+            }
+
             sendEvent("error", {
               tool: "send_message_to_agent",
-              error: error.message
+              error: friendlyMessage,
+              details: error.message,
+              step: phase
             });
             return JSON.stringify({
               success: false,
-              error: error.message,
+              error: friendlyMessage,
             });
           }
         },
@@ -1030,7 +1164,21 @@ export function createAIRoutes(agentManager) {
 
 
       // System prompt - Orchestrator Agent Workflow
+      const traderContextSection = selectedTraderId
+        ? `CURRENT TARGET TRADER:
+- Name: ${selectedTraderName || selectedTraderId}
+- Trader ID: ${selectedTraderId}
+- Signal Endpoint: ${signalEndpointHint}
+- Asset Class: Binance perpetual futures (crypto pairs such as BTCUSDT, SOLUSDT, ETHUSDT). Stocks like AAPL/GOOG are NOT valid.`
+        : `CURRENT TARGET TRADER:
+- Name: ${targetTraderLabel}
+- Trader ID: Not provided (derive from the user's request)
+- Signal Endpoint Pattern: ${signalEndpointHint}
+- Asset Class: Binance perpetual futures (crypto pairs ending with USDT). NEVER mention equities.`;
+
       const systemPrompt = `You are an Orchestrator Agent that coordinates a complete trading workflow using A2A (Agent-to-Agent) protocol.
+
+${traderContextSection}
 
 **WORKFLOW EXECUTION MODEL:**
 - You are executing a SEQUENTIAL workflow - one step at a time, in order
@@ -1053,27 +1201,28 @@ When a user requests to purchase trading signals and execute trades, you MUST fo
 
 **PHASE 2: PAYMENT**
 1. Extract the model name(s) from the user's request (OpenAI, Qwen, or both)
-2. For EACH model, complete this ENTIRE sequence before moving to the next model:
+2. For EACH model:
    a. Call process_payment tool with modelName
    b. WAIT for the tool result - it returns JSON with success, txHash fields
-   c. Parse the JSON response and extract the txHash value (it's a real hash starting with "0x")
-   d. Store this txHash - you MUST use the actual value, NOT placeholder text
-   e. Send A2A message to PaymentProcessor: "Payment processed for [modelName]. Transaction: [USE_THE_ACTUAL_TXHASH_YOU_EXTRACTED]. Please acknowledge."
-   f. WAIT for PaymentProcessor's response before continuing
-   g. Use respond_to_user ONCE: "✅ Payment processed for [modelName]. Transaction: [USE_THE_ACTUAL_TXHASH]"
-3. CRITICAL: Only proceed to Phase 3 AFTER all payments are complete and acknowledged
-4. If payment fails, stop immediately and inform the user via respond_to_user.
+   c. Parse the JSON response and extract the txHash value (it starts with "0x")
+3. AFTER all process_payment calls complete, send ONE A2A message to PaymentProcessor:
+   "Payment processed for [list all models]. Transactions: [list all txHashes]. Please acknowledge."
+4. WAIT for PaymentProcessor's acknowledgment
+5. Use respond_to_user ONCE: "✅ Payment complete for [all models]"
+6. IMMEDIATELY proceed to Phase 3 (do NOT wait or pause)
+7. If payment fails, stop immediately and inform the user via respond_to_user.
 
 **PHASE 3: SIGNAL RETRIEVAL**
 1. ONLY start this phase AFTER Phase 2 is completely finished (all payments confirmed)
 2. For EACH model, complete this ENTIRE sequence:
-   a. Send A2A message to DataAnalyzer: "Get the latest trading signal from [modelName] AI trading model. I need the complete signal including: decisions (long/short/wait actions with symbols and quantities), chain_of_thought, input_prompt, and account_state."
+   a. Send A2A message to DataAnalyzer: "Get the latest trading signal from [modelName] AI trading model (trader_id: ${selectedTraderId || 'USE_THE_USER_PROVIDED_TRADER_ID'}). Use the Go trading API endpoint ${signalEndpointHint} to fetch the JSON. I need the complete signal including: decisions (long/short/wait actions with symbols and quantities), chain_of_thought, input_prompt, and account_state. These signals must be Binance perpetual futures pairs (no equities)."
    b. WAIT for DataAnalyzer's complete response
    c. Parse the response - the send_message_to_agent tool returns JSON with responseText and possibly signalData
    d. Extract the FULL JSON signal data - look for signalData field in the tool response, or parse the JSON block from responseText
    e. Store this complete JSON data as a variable - you MUST send this exact JSON string to TradeExecutor later (not placeholder text)
-   f. Format a summary of decisions (e.g., "HYPEUSDT close_long, ALL wait")
-   g. Use respond_to_user ONCE: "📊 Trading signal retrieved for [modelName]: [YOUR_FORMATTED_SUMMARY]"
+   f. If the response mentions equities (AAPL/GOOG/etc.) or anything outside Binance futures, ask DataAnalyzer to correct it using the proper endpoint.
+   g. Format a summary of decisions (e.g., "HYPEUSDT close_long, ALL wait")
+   h. Use respond_to_user ONCE: "📊 Trading signal retrieved for [modelName]: [YOUR_FORMATTED_SUMMARY]"
 3. CRITICAL: Only proceed to Phase 4 AFTER all signals are retrieved and stored
 
 **PHASE 4: TRADE EXECUTION**

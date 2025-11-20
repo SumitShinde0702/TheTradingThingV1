@@ -6,6 +6,7 @@ import { CompetitionPage } from './components/CompetitionPage';
 import { PortfolioView } from './components/PortfolioView';
 import AILearning from './components/AILearning';
 import { TradingSignal } from './components/TradingSignal';
+import { PurchaseAgentButton } from './components/PurchaseAgentButton';
 import { AIDecisionView } from './components/AIDecisionView';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { t, type Language } from './i18n/translations';
@@ -450,6 +451,15 @@ function TraderDetailsPage({
           {/* Latest Trading Signal */}
           <div className="animate-slide-in" style={{ animationDelay: '0.12s' }}>
             <TradingSignal traderId={selectedTrader.trader_id} language={language} compact={true} />
+          </div>
+
+          {/* Hedera Purchase Button */}
+          <div className="animate-slide-in" style={{ animationDelay: '0.13s' }}>
+            <PurchaseAgentButton
+              traderName={selectedTrader.trader_name}
+              traderId={selectedTrader.trader_id}
+              language={language}
+            />
           </div>
 
           {/* Current Positions */}

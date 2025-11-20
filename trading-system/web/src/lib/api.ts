@@ -556,7 +556,11 @@ export const api = {
 
   // AI Agent Purchase with SSE
   // Note: This endpoint should point to TheTradingThingV1 server (port 8443)
-  async purchaseAgent(query: string, onEvent: (eventType: string, data: any) => void): Promise<() => void> {
+  async purchaseAgent(
+    query: string,
+    onEvent: (eventType: string, data: any) => void,
+    context?: { traderId?: string; traderName?: string }
+  ): Promise<() => void> {
     const AI_SERVER_URL = (import.meta as any).env?.VITE_AI_SERVER_URL || 'http://localhost:8443';
     
     const response = await fetch(`${AI_SERVER_URL}/api/ai/purchase`, {
@@ -564,7 +568,11 @@ export const api = {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({
+        query,
+        traderId: context?.traderId,
+        traderName: context?.traderName,
+      }),
     });
 
     if (!response.ok) {

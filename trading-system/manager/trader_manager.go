@@ -100,7 +100,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 	if cfg.CopyFromTraderID != "" {
 		log.Printf("✓ Trader '%s' (%s) added - will copy from '%s'", cfg.Name, cfg.AIModel, cfg.CopyFromTraderID)
 	} else {
-		log.Printf("✓ Trader '%s' (%s) added", cfg.Name, cfg.AIModel)
+	log.Printf("✓ Trader '%s' (%s) added", cfg.Name, cfg.AIModel)
 	}
 	return nil
 }
