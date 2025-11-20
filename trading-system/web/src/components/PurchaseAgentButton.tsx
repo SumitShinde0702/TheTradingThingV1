@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { t, type Language } from '../i18n/translations';
 
@@ -120,6 +120,47 @@ const formatEventMessage = (type: string, data: any): string => {
   }
 };
 
+const renderMessageWithLinks = (message: string): React.ReactNode => {
+  // Match HashScan URLs (hashscan.io/testnet/transaction/...)
+  const hashscanRegex = /(https?:\/\/hashscan\.io\/[^\s\)]+)/gi;
+  const parts: (string | React.ReactElement)[] = [];
+  let lastIndex = 0;
+  let match;
+  let keyCounter = 0;
+
+  while ((match = hashscanRegex.exec(message)) !== null) {
+    // Add text before the link
+    if (match.index > lastIndex) {
+      parts.push(message.slice(lastIndex, match.index));
+    }
+    
+    // Add the clickable link
+    const url = match[0];
+    parts.push(
+      <a
+        key={`link-${keyCounter++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="underline font-semibold hover:opacity-80 transition-opacity"
+        style={{ color: '#60a5fa' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {url}
+      </a>
+    );
+    
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Add remaining text
+  if (lastIndex < message.length) {
+    parts.push(message.slice(lastIndex));
+  }
+  
+  return parts.length > 0 ? <>{parts}</> : message;
+};
+
 export function PurchaseAgentButton({ traderName, traderId, language }: PurchaseAgentButtonProps) {
   const [query, setQuery] = useState(() => buildDefaultQuery(traderName, traderId));
   const [isDirty, setIsDirty] = useState(false);
@@ -141,7 +182,20 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
   const markWorkflowStep = (step: WorkflowStepId, status: WorkflowStatus) => {
     setWorkflowState((prev) => {
       if (!step || prev[step] === status) return prev;
-      return { ...prev, [step]: status };
+      const updated = { ...prev, [step]: status };
+      
+      // Auto-advance: when a step completes, mark next as active if it's still pending
+      if (status === 'completed') {
+        const currentIndex = WORKFLOW_STEPS.findIndex(s => s.id === step);
+        if (currentIndex >= 0 && currentIndex < WORKFLOW_STEPS.length - 1) {
+          const nextStep = WORKFLOW_STEPS[currentIndex + 1];
+          if (updated[nextStep.id] === 'pending') {
+            updated[nextStep.id] = 'active';
+          }
+        }
+      }
+      
+      return updated;
     });
   };
 
@@ -220,6 +274,20 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
                 markWorkflowStep(stepId, 'error');
               }
             }
+          }
+
+          // Auto-detect step completions from other events
+          if (eventType === 'tool' && data?.tool === 'process_payment' && data?.status === 'completed') {
+            markWorkflowStep('payment', 'completed');
+          }
+          if (eventType === 'tool' && data?.tool === 'discover_agents' && data?.status === 'completed') {
+            markWorkflowStep('discovery', 'completed');
+          }
+          if (eventType === 'agent_response' && data?.from === 'DataAnalyzer') {
+            markWorkflowStep('signal', 'completed');
+          }
+          if (eventType === 'agent_response' && data?.from === 'TradeExecutor') {
+            markWorkflowStep('execution', 'completed');
           }
 
           if (eventType === 'complete') {
@@ -313,41 +381,61 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
       )}
 
       <div className="rounded-lg border border-gray-800 bg-[#0B0E11] p-4 mb-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-6">
           {WORKFLOW_STEPS.map((step, index) => {
             const status = workflowState[step.id];
             const styles = STEP_STATUS_STYLES[status] || STEP_STATUS_STYLES.pending;
             const connectorColor =
               status === 'pending' ? '#1F2A37' : styles.connector;
+            const isLast = index === WORKFLOW_STEPS.length - 1;
 
             return (
-              <div key={step.id} className="flex flex-col gap-2 sm:flex-1">
-                <div className="flex items-center gap-3">
+              <div key={step.id} className="flex items-start gap-4">
+                <div className="flex flex-col items-center">
                   <div
-                    className="w-9 h-9 rounded-full border-2 text-xs font-bold flex items-center justify-center"
+                    className="w-10 h-10 rounded-full border-2 text-sm font-bold flex items-center justify-center transition-all duration-300 shadow-lg"
                     style={{
                       background: styles.circleBg,
                       borderColor: styles.circleBorder,
                       color: styles.text,
+                      boxShadow: status !== 'pending' ? `0 0 12px ${styles.circleBorder}40` : 'none',
                     }}
                   >
                     {index + 1}
                   </div>
-                  <div>
-                    <div className="text-xs font-semibold" style={{ color: styles.text === '#000000' ? '#111827' : styles.text }}>
-                      {step.label}
-                    </div>
-                    <div className="text-[11px]" style={{ color: '#6B7280' }}>
-                      {step.description}
-                    </div>
-                  </div>
+                  {!isLast && (
+                    <div
+                      className="w-0.5 flex-1 min-h-[60px] mt-2 transition-all duration-300"
+                      style={{ 
+                        background: connectorColor, 
+                        opacity: status === 'pending' ? 0.3 : 1 
+                      }}
+                    ></div>
+                  )}
                 </div>
-                {index < WORKFLOW_STEPS.length - 1 && (
-                  <div
-                    className="hidden sm:block h-px w-full"
-                    style={{ background: connectorColor, opacity: status === 'pending' ? 0.4 : 1 }}
-                  ></div>
-                )}
+                <div className="flex-1 pt-1">
+                  <div className="text-base font-bold mb-1" style={{ color: status === 'pending' ? '#6B7280' : styles.text === '#000000' ? '#EAECEF' : styles.text }}>
+                    {step.label}
+                  </div>
+                  <div className="text-sm leading-relaxed" style={{ color: '#9CA3AF' }}>
+                    {step.description}
+                  </div>
+                  {status === 'active' && (
+                    <div className="mt-2 text-xs font-medium animate-pulse" style={{ color: styles.circleBorder }}>
+                      In progress...
+                    </div>
+                  )}
+                  {status === 'completed' && (
+                    <div className="mt-2 text-xs font-medium" style={{ color: '#0ECB81' }}>
+                      ✓ Completed
+                    </div>
+                  )}
+                  {status === 'error' && (
+                    <div className="mt-2 text-xs font-medium" style={{ color: '#F6465D' }}>
+                      ✗ Failed
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -361,21 +449,57 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
           <ul className="space-y-3">
             {logEntries.map((entry) => {
               const meta = EVENT_META[entry.type] || EVENT_META.default;
+              const hashscanUrl = entry.raw?.hashscanUrl || entry.raw?.result?.hashscanUrl || entry.raw?.payment?.hashscanUrl;
+              const txHash = entry.raw?.txHash || entry.raw?.result?.txHash || entry.raw?.payment?.txHash;
+              
               return (
                 <li key={entry.id} className="space-y-1">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-start gap-2">
+                    <div className="flex items-start gap-2 flex-1">
                       <span style={{ color: meta.color }}>{meta.icon}</span>
-                      <div>
+                      <div className="flex-1">
                         <div className="text-xs font-semibold" style={{ color: meta.color }}>
                           {meta.title}
                         </div>
-                        <div className="text-xs" style={{ color: '#EAECEF' }}>
-                          {entry.message}
+                        <div className="text-xs leading-relaxed" style={{ color: '#EAECEF' }}>
+                          {renderMessageWithLinks(entry.message)}
                         </div>
+                        {(hashscanUrl || txHash) && (
+                          <div className="mt-1 flex items-center gap-2 flex-wrap">
+                            {hashscanUrl && (
+                              <a
+                                href={hashscanUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] font-semibold underline hover:opacity-80 transition-opacity"
+                                style={{ color: '#60a5fa' }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                🔗 View on HashScan
+                              </a>
+                            )}
+                            {txHash && !hashscanUrl && (
+                              <a
+                                href={`https://hashscan.io/testnet/transaction/${txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] font-semibold underline hover:opacity-80 transition-opacity"
+                                style={{ color: '#60a5fa' }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                🔗 View Transaction
+                              </a>
+                            )}
+                            {txHash && (
+                              <span className="text-[10px] font-mono" style={{ color: '#9CA3AF' }}>
+                                {txHash.slice(0, 10)}...{txHash.slice(-8)}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <span className="text-[10px]" style={{ color: '#6B7280' }}>
+                    <span className="text-[10px] whitespace-nowrap" style={{ color: '#6B7280' }}>
                       {entry.timestamp}
                     </span>
                   </div>
