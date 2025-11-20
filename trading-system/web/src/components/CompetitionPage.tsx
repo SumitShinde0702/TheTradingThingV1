@@ -131,7 +131,7 @@ export function CompetitionPage() {
                 onChange={(e) => setPurchaseTraderId(e.target.value)}
                 className="rounded px-3 py-2 text-sm font-medium"
                 style={{ background: '#1E2329', border: '1px solid #2B3139', color: '#EAECEF' }}
-              >
+          >
                 {realOrCopyTraders.map((trader) => (
                   <option key={trader.trader_id} value={trader.trader_id}>
                     {trader.trader_name} ({trader.ai_model?.toUpperCase() || 'AI'})
