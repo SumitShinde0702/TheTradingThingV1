@@ -224,6 +224,42 @@ The system is configured via `config.json`. Here's a detailed configuration guid
 | `leverage.altcoin_leverage` | Max leverage for altcoins (⚠️ Subaccounts: ≤5x) | `5` (safe) or `20` (max for main account) |
 | `use_default_coins` | Use built-in coin list | `true` (recommended) |
 | `default_coins` | List of coins to trade | `["BTCUSDT", "ETHUSDT", ...]` |
+
+#### Default Coin List (Recommended for Real Trading)
+
+The system is configured with a curated list of **25 established cryptocurrencies** for safer real trading:
+
+**Top 10 by Market Cap:**
+- BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, AVAXUSDT, DOTUSDT, LINKUSDT
+
+**Established Layer 1s:**
+- ATOMUSDT, NEARUSDT, TONUSDT, SUIUSDT, APTUSDT, TIAUSDT
+
+**Top DeFi:**
+- UNIUSDT, AAVEUSDT
+
+**Established Altcoins:**
+- LTCUSDT, ETCUSDT, XLMUSDT, FILUSDT, TRXUSDT
+
+**Layer 2s:**
+- ARBUSDT, OPUSDT
+
+**Emerging but Solid:**
+- INJUSDT
+
+**Full List (28 coins):**
+```
+BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, AVAXUSDT, DOTUSDT, 
+LINKUSDT, UNIUSDT, ATOMUSDT, LTCUSDT, ETCUSDT, XLMUSDT, FILUSDT, TRXUSDT, 
+AAVEUSDT, APTUSDT, ARBUSDT, OPUSDT, SUIUSDT, TIAUSDT, INJUSDT, NEARUSDT, TONUSDT
+```
+
+**Why this list?**
+- ✅ High liquidity (deep order books, less slippage)
+- ✅ Lower volatility (more stable than meme coins)
+- ✅ Established track records
+- ✅ Lower manipulation risk
+- ✅ Better for algorithmic trading
 | `coin_pool_api_url` | External coin pool API (optional) | `""` (empty) |
 | `oi_top_api_url` | Open interest API (optional) | `""` (empty) |
 | `api_server_port` | Web dashboard port | `8080` |
