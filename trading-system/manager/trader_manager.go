@@ -63,6 +63,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		MaxDrawdown:           maxDrawdown,
 		StopTradingTime:       time.Duration(stopTradingMinutes) * time.Minute,
 		AutoTakeProfitPct:     globalConfig.AutoTakeProfitPct, // Auto take profit percentage
+		CopyFromTraderID:       cfg.CopyFromTraderID,           // Copy trading: ID of trader to copy from
 	}
 
 	// Build Supabase config if enabled
@@ -92,8 +93,15 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		return fmt.Errorf("failed to create trader: %w", err)
 	}
 
+	// Set trader manager reference for copy trading
+	at.SetTraderManager(tm)
+
 	tm.traders[cfg.ID] = at
-	log.Printf("✓ Trader '%s' (%s) added", cfg.Name, cfg.AIModel)
+	if cfg.CopyFromTraderID != "" {
+		log.Printf("✓ Trader '%s' (%s) added - will copy from '%s'", cfg.Name, cfg.AIModel, cfg.CopyFromTraderID)
+	} else {
+		log.Printf("✓ Trader '%s' (%s) added", cfg.Name, cfg.AIModel)
+	}
 	return nil
 }
 

@@ -71,6 +71,9 @@ type AutoTraderConfig struct {
 
 	// Auto take profit (paper trading only)
 	AutoTakeProfitPct float64 // Auto close at this P&L % (0 = disabled, 1.0 = 1%)
+
+	// Copy trading: if set, this trader will copy decisions from another trader
+	CopyFromTraderID string // ID of trader to copy from
 }
 
 // SupabaseConfig configuration for Supabase database (aliased from logger package)
@@ -95,6 +98,7 @@ type AutoTrader struct {
 	callCount             int              // AI call count
 	positionFirstSeenTime map[string]int64 // Position first seen time (symbol_side -> timestamp in milliseconds)
 	multiAgentConfig      interface{}      // Multi-agent config (avoid circular import - use interface{})
+	traderManager         interface{}      // Trader manager reference (for copy trading - avoid circular import)
 }
 
 // NewAutoTrader creates auto trader
@@ -607,38 +611,209 @@ func (at *AutoTrader) runCycle() error {
 	}
 	log.Printf("💡 Note: These are ACTUAL Binance account values (shared account). Frontend shows proportional values per trader.")
 
-	// 4. Call AI to get full decision (multi-agent or single-agent)
+	// 4. Call AI to get full decision (multi-agent or single-agent) OR copy from another trader
 	log.Println("🤖 Requesting AI analysis and decision...")
 
 	var decision *decisionPkg.FullDecision
 	// err is already declared from buildTradingContext above
 
-	// Check if multi-agent is enabled
-	if at.multiAgentConfig != nil {
-		// Use multi-agent consensus
-		cfg, ok := at.multiAgentConfig.(*config.MultiAgentConfig)
-		if ok && cfg != nil && cfg.Enabled {
-			// Convert config.MultiAgentConfig to multiagent.MultiAgentConfig
-			maConfig := convertToMultiAgentConfig(cfg)
-			if maConfig != nil {
-				log.Printf("🤖 [Multi-Agent] Using multi-agent consensus (mode: %s)", maConfig.ConsensusMode)
-				decision, err = multiagent.GetMultiAgentDecision(ctx, maConfig)
+	// Check if this trader should copy from another trader(s)
+	if at.config.CopyFromTraderID != "" && at.traderManager != nil {
+		// Get trader manager (using type assertion)
+		type TraderManagerInterface interface {
+			GetTrader(id string) (*AutoTrader, error)
+			GetAllTraders() map[string]*AutoTrader
+		}
+		tm, ok := at.traderManager.(TraderManagerInterface)
+		if !ok {
+			log.Printf("⚠️  [Copy Trading] Failed to get trader manager, falling back to AI")
+		} else {
+			var allSourceDecisions []decisionPkg.Decision
+			var allCoTTraces []string
+			var sourceTraderNames []string
+			totalSourceEquity := 0.0
+
+			// Check if copying from all traders or specific trader
+			if at.config.CopyFromTraderID == "all" || at.config.CopyFromTraderID == "portfolio" {
+				// Copy from ALL traders (except itself)
+				log.Printf("📋 [Copy Trading] Copying decisions from ALL traders")
+				allTraders := tm.GetAllTraders()
+				for traderID, sourceTrader := range allTraders {
+					// Skip self
+					if traderID == at.id {
+						continue
+					}
+					// Get latest decision from this trader
+					sourceRecords, err := sourceTrader.GetDecisionLogger().GetLatestRecords(1)
+					if err != nil || len(sourceRecords) == 0 {
+						continue
+					}
+					latestRecord := sourceRecords[len(sourceRecords)-1]
+					if latestRecord.DecisionJSON == "" {
+						continue
+					}
+					var traderDecisions []decisionPkg.Decision
+					if err := json.Unmarshal([]byte(latestRecord.DecisionJSON), &traderDecisions); err != nil {
+						continue
+					}
+					// Add decisions from this trader
+					for _, d := range traderDecisions {
+						// Skip "wait" and "hold" actions
+						if d.Action == "wait" || d.Action == "hold" || d.Symbol == "ALL" {
+							continue
+						}
+						allSourceDecisions = append(allSourceDecisions, d)
+					}
+					if latestRecord.CoTTrace != "" {
+						allCoTTraces = append(allCoTTraces, fmt.Sprintf("=== %s ===\n%s", sourceTrader.GetName(), latestRecord.CoTTrace))
+					}
+					sourceTraderNames = append(sourceTraderNames, sourceTrader.GetName())
+					// Get source equity for scaling
+					sourceAccount, _ := sourceTrader.GetAccountInfo()
+					if eq, ok := sourceAccount["total_equity"].(float64); ok && eq > 0 {
+						totalSourceEquity += eq
+					} else {
+						totalSourceEquity += sourceTrader.GetInitialBalance()
+					}
+				}
+			} else {
+				// Copy from specific trader
+				log.Printf("📋 [Copy Trading] Copying decisions from trader: %s", at.config.CopyFromTraderID)
+				sourceTrader, err := tm.GetTrader(at.config.CopyFromTraderID)
 				if err != nil {
-					log.Printf("⚠️  Multi-agent decision failed, falling back to single-agent: %v", err)
-					// Fallback to single-agent
+					log.Printf("⚠️  [Copy Trading] Failed to get source trader '%s': %v, falling back to AI", at.config.CopyFromTraderID, err)
+				} else {
+					// Get latest decision from source trader
+					sourceRecords, err := sourceTrader.GetDecisionLogger().GetLatestRecords(1)
+					if err != nil || len(sourceRecords) == 0 {
+						log.Printf("⚠️  [Copy Trading] No recent decisions from source trader, falling back to AI")
+					} else {
+						latestRecord := sourceRecords[len(sourceRecords)-1]
+						if latestRecord.DecisionJSON != "" {
+							if err := json.Unmarshal([]byte(latestRecord.DecisionJSON), &allSourceDecisions); err != nil {
+								log.Printf("⚠️  [Copy Trading] Failed to parse source decision JSON: %v, falling back to AI", err)
+							} else {
+								if latestRecord.CoTTrace != "" {
+									allCoTTraces = append(allCoTTraces, fmt.Sprintf("=== %s ===\n%s", sourceTrader.GetName(), latestRecord.CoTTrace))
+								}
+								sourceTraderNames = append(sourceTraderNames, sourceTrader.GetName())
+								// Get source equity
+								sourceAccount, _ := sourceTrader.GetAccountInfo()
+								if eq, ok := sourceAccount["total_equity"].(float64); ok && eq > 0 {
+									totalSourceEquity = eq
+								} else {
+									totalSourceEquity = sourceTrader.GetInitialBalance()
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// If we have decisions, process them
+			if len(allSourceDecisions) > 0 {
+				currentEquity := ctx.Account.TotalEquity
+				if currentEquity <= 0 {
+					currentEquity = at.initialBalance
+				}
+
+				equityRatio := 1.0
+				if totalSourceEquity > 0 {
+					equityRatio = currentEquity / totalSourceEquity
+				}
+
+				log.Printf("📊 [Copy Trading] Source equity: %.2f, Current equity: %.2f, Ratio: %.2f",
+					totalSourceEquity, currentEquity, equityRatio)
+
+				// Deduplicate decisions by symbol+action (if multiple traders want same action, take first)
+				decisionMap := make(map[string]decisionPkg.Decision) // key: symbol_action
+				for _, d := range allSourceDecisions {
+					// Skip "wait" and "hold"
+					if d.Action == "wait" || d.Action == "hold" || d.Symbol == "ALL" {
+						continue
+					}
+					key := fmt.Sprintf("%s_%s", d.Symbol, d.Action)
+					if _, exists := decisionMap[key]; !exists {
+						decisionMap[key] = d
+					}
+				}
+
+				// Scale decisions
+				scaledDecisions := make([]decisionPkg.Decision, 0, len(decisionMap))
+				for _, d := range decisionMap {
+					scaledDecision := d
+					// Scale position size proportionally
+					if d.PositionSizeUSD > 0 {
+						scaledDecision.PositionSizeUSD = d.PositionSizeUSD * equityRatio
+						// Ensure minimum position size (20% of equity for BTC/ETH, 15% for altcoins)
+						minSizeBTCETH := currentEquity * 0.20
+						minSizeAltcoin := currentEquity * 0.15
+						isBTCETH := d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT"
+						minSize := minSizeAltcoin
+						if isBTCETH {
+							minSize = minSizeBTCETH
+						}
+						if scaledDecision.PositionSizeUSD < minSize && scaledDecision.PositionSizeUSD > 0 {
+							scaledDecision.PositionSizeUSD = minSize
+						}
+					}
+					// Update reasoning to indicate it's copied
+					sourceNames := strings.Join(sourceTraderNames, ", ")
+					scaledDecision.Reasoning = fmt.Sprintf("[Copied from %s] %s", sourceNames, d.Reasoning)
+					scaledDecisions = append(scaledDecisions, scaledDecision)
+				}
+
+				// Create decision with copied data
+				combinedCoT := strings.Join(allCoTTraces, "\n\n")
+				if combinedCoT == "" {
+					combinedCoT = fmt.Sprintf("📋 [Copy Trading] Copied %d decisions from: %s", len(scaledDecisions), strings.Join(sourceTraderNames, ", "))
+				} else {
+					combinedCoT = fmt.Sprintf("📋 [Copy Trading] Copied %d decisions from: %s\n\n%s", len(scaledDecisions), strings.Join(sourceTraderNames, ", "), combinedCoT)
+				}
+
+				decision = &decisionPkg.FullDecision{
+					UserPrompt:  fmt.Sprintf("Copy trading from: %s", strings.Join(sourceTraderNames, ", ")),
+					CoTTrace:    combinedCoT,
+					Decisions:   scaledDecisions,
+					RawResponse: fmt.Sprintf("Copied from %s", strings.Join(sourceTraderNames, ", ")),
+					Timestamp:   time.Now(),
+				}
+
+				log.Printf("✅ [Copy Trading] Successfully copied %d decisions from: %s", len(scaledDecisions), strings.Join(sourceTraderNames, ", "))
+				err = nil // Clear any previous errors
+			}
+		}
+	}
+
+	// If copy trading didn't produce a decision, use AI (normal flow)
+	if decision == nil {
+		// Check if multi-agent is enabled
+		if at.multiAgentConfig != nil {
+			// Use multi-agent consensus
+			cfg, ok := at.multiAgentConfig.(*config.MultiAgentConfig)
+			if ok && cfg != nil && cfg.Enabled {
+				// Convert config.MultiAgentConfig to multiagent.MultiAgentConfig
+				maConfig := convertToMultiAgentConfig(cfg)
+				if maConfig != nil {
+					log.Printf("🤖 [Multi-Agent] Using multi-agent consensus (mode: %s)", maConfig.ConsensusMode)
+					decision, err = multiagent.GetMultiAgentDecision(ctx, maConfig)
+					if err != nil {
+						log.Printf("⚠️  Multi-agent decision failed, falling back to single-agent: %v", err)
+						// Fallback to single-agent
+						decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
+					}
+				} else {
+					log.Printf("⚠️  Failed to convert multi-agent config, using single-agent")
 					decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
 				}
 			} else {
-				log.Printf("⚠️  Failed to convert multi-agent config, using single-agent")
+				// Multi-agent config exists but not enabled, use single-agent
 				decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
 			}
 		} else {
-			// Multi-agent config exists but not enabled, use single-agent
+			// No multi-agent config, use single-agent
 			decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
 		}
-	} else {
-		// No multi-agent config, use single-agent
-		decision, err = decisionPkg.GetFullDecision(ctx, at.mcpClient)
 	}
 
 	// Save chain of thought, decision, and input prompt even if there's an error (for debugging)
@@ -1287,6 +1462,11 @@ func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
 	return at.decisionLogger
 }
 
+// SetTraderManager sets trader manager reference (for copy trading)
+func (at *AutoTrader) SetTraderManager(tm interface{}) {
+	at.traderManager = tm
+}
+
 // restorePaperTraderState restores paper trader state (balance and positions) from decision logs
 func restorePaperTraderState(initialBalance float64, decisionLogger *logger.DecisionLogger) (*PaperTrader, error) {
 	if decisionLogger == nil {
@@ -1453,6 +1633,11 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 		"last_reset_time": at.lastResetTime.Format(time.RFC3339),
 		"ai_provider":     aiProvider,
 	}
+}
+
+// GetInitialBalance gets initial balance
+func (at *AutoTrader) GetInitialBalance() float64 {
+	return at.initialBalance
 }
 
 // GetAccountInfo gets account information (for API)

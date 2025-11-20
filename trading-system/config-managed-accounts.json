@@ -1,42 +1,17 @@
 {
     "traders": [
         {
-            "id": "llama_scalper_binance_real",
-            "name": "Llama Scalper (Binance Real)",
+            "id": "your_account_main",
+            "name": "Your Account",
             "enabled": true,
             "ai_model": "groq",
             "exchange": "binance",
-            "binance_api_key": "${BINANCE_API_KEY}",
-            "binance_secret_key": "${BINANCE_SECRET_KEY}",
-            "groq_key": "${GROQ_API_KEY}",
-            "groq_model": "llama-3.1-8b-instant",
-            "initial_balance": 63.00,
-            "scan_interval_minutes": 15
-        },
-        {
-            "id": "llama_analyzer_binance_real",
-            "name": "Llama 3.3 70B Analyzer (Binance Real)",
-            "enabled": true,
-            "ai_model": "groq",
-            "exchange": "binance",
-            "binance_api_key": "${BINANCE_API_KEY}",
-            "binance_secret_key": "${BINANCE_SECRET_KEY}",
+            "binance_api_key": "${YOUR_BINANCE_API_KEY}",
+            "binance_secret_key": "${YOUR_BINANCE_SECRET_KEY}",
             "groq_key": "${GROQ_API_KEY}",
             "groq_model": "llama-3.3-70b-versatile",
-            "initial_balance": 63.00,
-            "scan_interval_minutes": 20
-        },
-        {
-            "id": "deepseek_trader_binance_real",
-            "name": "DeepSeek Strategist (Binance Real)",
-            "enabled": true,
-            "ai_model": "deepseek",
-            "exchange": "binance",
-            "binance_api_key": "${BINANCE_API_KEY}",
-            "binance_secret_key": "${BINANCE_SECRET_KEY}",
-            "deepseek_key": "${DEEPSEEK_API_KEY}",
-            "initial_balance": 37.00,
-            "scan_interval_minutes": 10
+            "initial_balance": 1000.0,
+            "scan_interval_minutes": 15
         },
         {
             "id": "brendan_account",
@@ -48,9 +23,9 @@
             "binance_secret_key": "${BRENDAN_BINANCE_SECRET_KEY}",
             "groq_key": "${GROQ_API_KEY}",
             "groq_model": "llama-3.3-70b-versatile",
-            "initial_balance": 199.65,
-            "scan_interval_minutes": 10,
-            "copy_from_trader_id": "all"
+            "initial_balance": 10000.0,
+            "scan_interval_minutes": 15,
+            "copy_from_trader_id": "llama_analyzer_binance_real"
         }
     ],
     "leverage": {

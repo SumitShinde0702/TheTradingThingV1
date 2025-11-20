@@ -227,13 +227,13 @@ The system is configured via `config.json`. Here's a detailed configuration guid
 
 #### Default Coin List (Recommended for Real Trading)
 
-The system is configured with a curated list of **25 established cryptocurrencies** for safer real trading:
+The system is configured with a curated list of **29 established cryptocurrencies** for safer real trading:
 
 **Top 10 by Market Cap:**
 - BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, AVAXUSDT, DOTUSDT, LINKUSDT
 
 **Established Layer 1s:**
-- ATOMUSDT, NEARUSDT, TONUSDT, SUIUSDT, APTUSDT, TIAUSDT
+- ATOMUSDT, NEARUSDT, TONUSDT, SUIUSDT, APTUSDT, TIAUSDT, HBARUSDT, ICPUSDT, FTMUSDT, EGLDUSDT
 
 **Top DeFi:**
 - UNIUSDT, AAVEUSDT
@@ -251,7 +251,8 @@ The system is configured with a curated list of **25 established cryptocurrencie
 ```
 BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, AVAXUSDT, DOTUSDT, 
 LINKUSDT, UNIUSDT, ATOMUSDT, LTCUSDT, ETCUSDT, XLMUSDT, FILUSDT, TRXUSDT, 
-AAVEUSDT, APTUSDT, ARBUSDT, OPUSDT, SUIUSDT, TIAUSDT, INJUSDT, NEARUSDT, TONUSDT
+AAVEUSDT, APTUSDT, ARBUSDT, OPUSDT, SUIUSDT, TIAUSDT, INJUSDT, NEARUSDT, 
+TONUSDT, HBARUSDT, ICPUSDT, FTMUSDT, EGLDUSDT
 ```
 
 **Why this list?**

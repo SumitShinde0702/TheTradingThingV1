@@ -45,6 +45,9 @@ type TraderConfig struct {
 
 	InitialBalance      float64 `json:"initial_balance"`
 	ScanIntervalMinutes float64 `json:"scan_interval_minutes"`
+
+	// Copy trading: if set, this trader will copy decisions from another trader
+	CopyFromTraderID string `json:"copy_from_trader_id,omitempty"` // ID of trader to copy from
 }
 
 // LeverageConfig leverage configuration

@@ -262,25 +262,25 @@ export function PortfolioView() {
           <h2 className="text-2xl font-bold mb-4" style={{ color: '#EAECEF' }}>
             Connection Failed
           </h2>
-          <button
-            onClick={() => {
-              setRetryCount(0);
-              setLastError(null);
-              mutate();
-            }}
-            className="px-6 py-3 rounded-lg font-semibold mb-4 transition-all"
-            style={{
-              background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
-              color: '#000',
-            }}
-          >
-            🔄 Retry Connection
-          </button>
+              <button
+                onClick={() => {
+                  setRetryCount(0);
+                  setLastError(null);
+                  mutate();
+                }}
+                className="px-6 py-3 rounded-lg font-semibold mb-4 transition-all"
+                style={{
+                  background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
+                  color: '#000',
+                }}
+              >
+                🔄 Retry Connection
+              </button>
         </div>
       </div>
     );
   }
-
+  
   if (error && retryCount < 3) {
     return (
       <div className="binance-card p-6">
@@ -385,9 +385,9 @@ export function PortfolioView() {
             timeBasedPnL.lifetime.pnl >= 0 ? 'text-green-400' : 'text-red-400'
           }`}>
             {timeBasedPnL.lifetime.pnl >= 0 ? '+' : ''}{formatCurrency(timeBasedPnL.lifetime.pnl)} USD
+            </div>
           </div>
         </div>
-      </div>
 
       {/* Profit and Loss Analysis */}
       <div className="binance-card p-6">
