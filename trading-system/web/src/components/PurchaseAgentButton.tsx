@@ -120,6 +120,36 @@ const formatEventMessage = (type: string, data: any): string => {
   }
 };
 
+const getLogStep = (entry: PurchaseLogEntry): WorkflowStepId | null => {
+  const { type, raw } = entry;
+  
+  // Discovery logs
+  if (type === 'tool' && raw?.tool === 'discover_agents') return 'discovery';
+  if (type === 'workflow_step' && raw?.step === 'discovery') return 'discovery';
+  
+  // Payment logs
+  if (type === 'tool' && raw?.tool === 'process_payment') return 'payment';
+  if (type === 'workflow_step' && raw?.step === 'payment') return 'payment';
+  if (type === 'payment') return 'payment';
+  if (raw?.txHash || raw?.hashscanUrl || raw?.result?.txHash || raw?.result?.hashscanUrl) return 'payment';
+  
+  // Signal logs
+  if (type === 'workflow_step' && raw?.step === 'signal') return 'signal';
+  if (type === 'agent_response' && (raw?.from === 'DataAnalyzer' || raw?.agentName === 'DataAnalyzer')) return 'signal';
+  if (type === 'agent_conversation' && raw?.to?.toLowerCase().includes('dataanalyzer')) return 'signal';
+  
+  // Execution logs
+  if (type === 'workflow_step' && raw?.step === 'execution') return 'execution';
+  if (type === 'agent_response' && (raw?.from === 'TradeExecutor' || raw?.agentName === 'TradeExecutor')) return 'execution';
+  if (type === 'agent_conversation' && raw?.to?.toLowerCase().includes('tradeexecutor')) return 'execution';
+  
+  // Completion logs
+  if (type === 'complete') return 'completion';
+  if (type === 'workflow_step' && raw?.step === 'completion') return 'completion';
+  
+  return null;
+};
+
 const renderMessageWithLinks = (message: string): React.ReactNode => {
   // Match HashScan URLs (hashscan.io/testnet/transaction/...)
   const hashscanRegex = /(https?:\/\/hashscan\.io\/[^\s\)]+)/gi;
@@ -388,10 +418,29 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
             const connectorColor =
               status === 'pending' ? '#1F2A37' : styles.connector;
             const isLast = index === WORKFLOW_STEPS.length - 1;
+            
+            // Filter logs for this step
+            const stepLogs = logEntries.filter(entry => getLogStep(entry) === step.id);
+
+            // Find HashScan link for this step
+            const stepHashscanUrl = stepLogs.find(entry => {
+              const hashscanUrl = entry.raw?.hashscanUrl || entry.raw?.result?.hashscanUrl || entry.raw?.payment?.hashscanUrl;
+              return hashscanUrl;
+            })?.raw?.hashscanUrl || 
+            stepLogs.find(entry => entry.raw?.result?.hashscanUrl)?.raw?.result?.hashscanUrl ||
+            stepLogs.find(entry => entry.raw?.payment?.hashscanUrl)?.raw?.payment?.hashscanUrl;
+            
+            const stepTxHash = stepLogs.find(entry => {
+              const txHash = entry.raw?.txHash || entry.raw?.result?.txHash || entry.raw?.payment?.txHash;
+              return txHash;
+            })?.raw?.txHash || 
+            stepLogs.find(entry => entry.raw?.result?.txHash)?.raw?.result?.txHash ||
+            stepLogs.find(entry => entry.raw?.payment?.txHash)?.raw?.payment?.txHash;
 
             return (
-              <div key={step.id} className="flex items-start gap-4">
-                <div className="flex flex-col items-center">
+              <div key={step.id} className="grid grid-cols-1 lg:grid-cols-[auto_200px_1fr] gap-2 lg:gap-1 items-start">
+                {/* Circle indicator */}
+                <div className="flex flex-col items-center flex-shrink-0">
                   <div
                     className="w-10 h-10 rounded-full border-2 text-sm font-bold flex items-center justify-center transition-all duration-300 shadow-lg"
                     style={{
@@ -413,13 +462,43 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
                     ></div>
                   )}
                 </div>
-                <div className="flex-1 pt-1">
+                
+                {/* Step info - fixed width to align log boxes */}
+                <div className="pt-1 min-w-0 lg:min-w-[200px]">
                   <div className="text-base font-bold mb-1" style={{ color: status === 'pending' ? '#6B7280' : styles.text === '#000000' ? '#EAECEF' : styles.text }}>
                     {step.label}
                   </div>
                   <div className="text-sm leading-relaxed" style={{ color: '#9CA3AF' }}>
                     {step.description}
                   </div>
+                  {/* HashScan link directly under description */}
+                  {(stepHashscanUrl || stepTxHash) && (
+                    <div className="mt-2">
+                      {stepHashscanUrl ? (
+                        <a
+                          href={stepHashscanUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs font-semibold underline hover:opacity-80 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-500/20"
+                          style={{ color: '#60a5fa' }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          🔗 View on HashScan
+                        </a>
+                      ) : stepTxHash ? (
+                        <a
+                          href={`https://hashscan.io/testnet/transaction/${stepTxHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs font-semibold underline hover:opacity-80 transition-opacity inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-500/20"
+                          style={{ color: '#60a5fa' }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          🔗 View Transaction
+                        </a>
+                      ) : null}
+                    </div>
+                  )}
                   {status === 'active' && (
                     <div className="mt-2 text-xs font-medium animate-pulse" style={{ color: styles.circleBorder }}>
                       In progress...
@@ -436,6 +515,83 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
                     </div>
                   )}
                 </div>
+                
+                {/* Step-specific log box - aligned to top */}
+                {stepLogs.length > 0 ? (
+                  <div className="rounded-lg border border-gray-700 bg-[#0F1419] p-3 max-h-96 overflow-y-auto min-w-0">
+                    <div className="text-xs font-semibold mb-2 flex items-center justify-between" style={{ color: '#848E9C' }}>
+                      <span>{step.label} Logs</span>
+                      <span className="px-2 py-0.5 rounded-full bg-gray-800" style={{ color: '#9CA3AF' }}>
+                        {stepLogs.length}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {stepLogs.map((entry) => {
+                        const meta = EVENT_META[entry.type] || EVENT_META.default;
+                        const hashscanUrl = entry.raw?.hashscanUrl || entry.raw?.result?.hashscanUrl || entry.raw?.payment?.hashscanUrl;
+                        const txHash = entry.raw?.txHash || entry.raw?.result?.txHash || entry.raw?.payment?.txHash;
+                        
+                        return (
+                          <div key={entry.id} className="text-xs space-y-1 pb-2 border-b border-gray-800 last:border-0">
+                            <div className="flex items-start gap-2">
+                              <span className="flex-shrink-0" style={{ color: meta.color }}>{meta.icon}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-semibold mb-1" style={{ color: meta.color }}>
+                                  {meta.title}
+                                </div>
+                                <div className="leading-relaxed break-words" style={{ color: '#EAECEF' }}>
+                                  {renderMessageWithLinks(entry.message)}
+                                </div>
+                                {(hashscanUrl || txHash) && (
+                                  <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                                    {hashscanUrl && (
+                                      <a
+                                        href={hashscanUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[10px] font-semibold underline hover:opacity-80 transition-opacity px-2 py-0.5 rounded bg-blue-500/20 inline-flex items-center gap-1"
+                                        style={{ color: '#60a5fa' }}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        🔗 View on HashScan
+                                      </a>
+                                    )}
+                                    {txHash && !hashscanUrl && (
+                                      <a
+                                        href={`https://hashscan.io/testnet/transaction/${txHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[10px] font-semibold underline hover:opacity-80 transition-opacity px-2 py-0.5 rounded bg-blue-500/20 inline-flex items-center gap-1"
+                                        style={{ color: '#60a5fa' }}
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        🔗 View Transaction
+                                      </a>
+                                    )}
+                                    {txHash && (
+                                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-gray-800" style={{ color: '#9CA3AF' }}>
+                                        {txHash.slice(0, 10)}...{txHash.slice(-8)}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="text-[10px] mt-1" style={{ color: '#6B7280' }}>
+                                  {entry.timestamp}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-gray-700 bg-[#0F1419] p-3 min-h-[96px] flex items-center justify-center">
+                    <div className="text-xs" style={{ color: '#6B7280' }}>
+                      No logs yet...
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
