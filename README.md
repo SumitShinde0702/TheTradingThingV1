@@ -1,6 +1,5 @@
-[**🌐 Frontend Repository**](https://github.com/bchuazw/TheTradingThing/tree/WIP/A2A/nofx)
 
-# The Trading Thing V1
+# AlphaNet
 
 An agent-first digital economy on Hedera testnet, enabling agent-to-agent (A2A) communication, discovery, and secure payments.
 
