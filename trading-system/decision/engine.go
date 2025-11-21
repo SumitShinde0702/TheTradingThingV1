@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+const (
+	maxRiskPerTradeFraction = 0.02
+)
+
 // PositionInfo position information
 type PositionInfo struct {
 	Symbol           string  `json:"symbol"`
@@ -284,21 +288,25 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 
 	// === Hard Constraints (Risk Control) ===
 	sb.WriteString("# ⚖️ Hard Constraints (Risk Control)\n\n")
-	sb.WriteString("1. **Risk-Reward Ratio**: Must be ≥ 1:3 (risk 1%, earn 3%+ return)\n")
-	sb.WriteString("2. **Maximum Positions**: 6 positions TOTAL (HARD LIMIT - system will reject excess)\n")
+	sb.WriteString(fmt.Sprintf("1. **Max Risk Per Trade**: ≤ %.1f%% of equity (≈ %.2f USDT right now)\n",
+		maxRiskPerTradeFraction*100, accountEquity*maxRiskPerTradeFraction))
+	sb.WriteString("   - ALWAYS size positions + stop losses so the worst-case loss stays under this cap\n")
+	sb.WriteString("   - Closing a losing position is REQUIRED when the stop is hit—protect capital first\n")
+	sb.WriteString("2. **Risk-Reward Ratio**: Must be ≥ 1:3 (risk 1%, earn 3%+ return)\n")
+	sb.WriteString("3. **Maximum Positions**: 6 positions TOTAL (HARD LIMIT - system will reject excess)\n")
 	sb.WriteString("   - ⚠️ CRITICAL: If you already have positions, count them! Don't open more than 6 total!\n")
 	sb.WriteString("   - ✅ ALLOWED: Multiple positions in the same coin are allowed (e.g., 2 ETHUSDT long positions)\n")
 	sb.WriteString("   - ⚠️ CRITICAL: Build gradually - add one position at a time and reassess\n")
 	sb.WriteString("   - ⚠️ CRITICAL: Opening too many positions at once = margin exhaustion = all fail!\n")
-	sb.WriteString("3. **Per-Position Size (MARGIN - Actual USDT Used)**: Use meaningful sizes to overcome fees\n")
+	sb.WriteString("4. **Per-Position Size (MARGIN - Actual USDT Used)**: Use meaningful sizes to overcome fees\n")
 	sb.WriteString(fmt.Sprintf("   - Altcoins: $%.0f-$%.0f MARGIN per position (15-25%% of equity) | BTC/ETH: $%.0f-$%.0f MARGIN per position (20-35%% of equity)\n",
 		accountEquity*0.15, accountEquity*0.25, accountEquity*0.20, accountEquity*0.35))
 	sb.WriteString("   - 💡 IMPORTANT: `position_size_usd` is the MARGIN (actual USDT used), NOT the notional value!\n")
 	sb.WriteString(fmt.Sprintf("   - 💡 With %dx leverage, $%.0f margin = $%.0f notional position (%.0f × %d)\n", altcoinLeverage, accountEquity*0.20, accountEquity*0.20*float64(altcoinLeverage), accountEquity*0.20, altcoinLeverage))
 	sb.WriteString(fmt.Sprintf("   - 💡 With %.0f USDT available, you can open ~%.0f positions of $%.0f margin each\n", accountEquity*0.93, (accountEquity*0.93)/(accountEquity*0.20), accountEquity*0.20))
 	sb.WriteString("   - ⚠️ Positions below minimum are rejected (too small to overcome fees)\n")
-	sb.WriteString("4. **Margin**: Total usage ≤ 90% (keep some available for new opportunities)\n")
-	sb.WriteString("5. **Position Opening Strategy**:\n")
+	sb.WriteString("5. **Margin**: Total usage ≤ 90% (keep some available for new opportunities)\n")
+	sb.WriteString("6. **Position Opening Strategy**:\n")
 	sb.WriteString("   - If 0-2 positions: Can open 1-2 new positions (build gradually)\n")
 	sb.WriteString("   - If 3-4 positions: Can open 1-2 more (max 6 total) - use available capital!\n")
 	sb.WriteString("   - If 5 positions: Can open 1 more (max 6 total)\n")
@@ -315,6 +323,27 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- Downtrend → Go short\n")
 	sb.WriteString("- Range-bound market → Wait\n\n")
 	sb.WriteString("**Don't have long bias! Shorting is one of your core tools**\n\n")
+
+	// === Market Regime Detection (CRITICAL) ===
+	sb.WriteString("# 🚨 Market Regime Detection (CRITICAL)\n\n")
+	sb.WriteString("**CRASH DETECTION RULES**:\n")
+	sb.WriteString("1. **Check BTC first** - BTC is the market leader\n")
+	sb.WriteString("   - If BTC 1h < -1.0%% AND 4h < -0.5%% → Market is CRASHING\n")
+	sb.WriteString("   - If BTC 4h EMA20 < EMA50 AND price < EMA20 → Downtrend confirmed\n")
+	sb.WriteString("2. **During crashes**:\n")
+	sb.WriteString("   - 🚫 DO NOT open LONG positions (even if individual coins show 'bounce' signals)\n")
+	sb.WriteString("   - ✅ SHORT opportunities are valid (but require high confidence)\n")
+	sb.WriteString("   - ✅ WAIT is often the safest option during crashes\n")
+	sb.WriteString("3. **Why**: During crashes, oversold bounces (RSI < 30) are TRAPS\n")
+	sb.WriteString("   - Price can stay oversold for hours\n")
+	sb.WriteString("   - MACD 'improving' during crashes is NOT a buy signal\n")
+	sb.WriteString("   - Altcoins fall MORE than BTC during crashes (higher correlation)\n\n")
+	sb.WriteString("**BULL MARKET DETECTION**:\n")
+	sb.WriteString("- BTC 1h > +0.5%% AND 4h > +0.3%% → Bullish\n")
+	sb.WriteString("- BTC price > EMA20 > EMA50 → Uptrend\n")
+	sb.WriteString("- During bull markets, LONG positions are preferred\n\n")
+	sb.WriteString("**NEUTRAL MARKET**:\n")
+	sb.WriteString("- If neither crash nor bull market detected → Be cautious, wait for clear signals\n\n")
 
 	// === Trading Frequency Awareness ===
 	sb.WriteString("# ⏱️ Trading Frequency Awareness\n\n")
@@ -354,14 +383,13 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- Range-bound oscillation\n")
 	sb.WriteString("- Recently closed (<15 minutes ago)\n\n")
 	sb.WriteString("**🚨 CRITICAL: Position Management Rules - READ CAREFULLY 🚨**:\n")
-	sb.WriteString("- 🚫 **ABSOLUTELY FORBIDDEN**: NEVER close positions that are losing money (negative P&L/unrealized P&L)\n")
-	sb.WriteString("- 🚫 **SYSTEM WILL REJECT**: If you try to close a losing position, the system will automatically reject it\n")
-	sb.WriteString("- ✅ **ONLY ALLOWED**: Close positions when they are profitable (positive P&L) OR stop loss is hit\n")
-	sb.WriteString("- 💡 **Strategy**: Hold losing positions until they recover - let winners run, let losers recover\n")
-	sb.WriteString("- 🎯 **Why**: This prevents realizing losses and allows positions to turn profitable\n")
-	sb.WriteString("- ⚠️ **Exception**: If stop loss is hit, position will auto-close (this is acceptable)\n")
-	sb.WriteString("- 📋 **Example**: If BNBUSDT is -2.5%% (losing), DO NOT close it. Wait until it becomes positive, THEN close.\n")
-	sb.WriteString("- 📋 **Example**: If ETHUSDT is +5.1%% (profitable), you CAN close it to lock in profits.\n\n")
+	sb.WriteString(fmt.Sprintf("- ✅ **Stop losses are MANDATORY**: Size trades so the stop risks ≤ %.1f%% of equity (≈ %.2f USDT)\n",
+		maxRiskPerTradeFraction*100, accountEquity*maxRiskPerTradeFraction))
+	sb.WriteString("- ✅ **Close losing positions the moment the stop is hit** – capital preservation > hope\n")
+	sb.WriteString("- ✅ Let winners run when risk is covered, but trail stops to lock gains\n")
+	sb.WriteString("- 🚫 Do NOT widen stops or average down unless the new plan still respects the risk cap\n")
+	sb.WriteString("- 📋 Example: If BTC risk (entry-stop) = 0.8%, you can risk 2% of equity → leverage accordingly\n")
+	sb.WriteString("- 📋 Example: If an alt needs a 5% stop, reduce size so a full stop = 2% of equity\n\n")
 	sb.WriteString("**Take Profit Strategy**:\n")
 	sb.WriteString("- ✅ Take profits when positions are significantly profitable (≥3-5%+ unrealized P&L)\n")
 	sb.WriteString("- ✅ Close positions that have reached or exceeded take profit targets\n")
@@ -410,13 +438,21 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 
 	// === Decision Process ===
 	sb.WriteString("# 📋 Decision Process\n\n")
-	sb.WriteString("1. **Analyze Sharpe Ratio**: Is current strategy effective? Need adjustment?\n")
-	sb.WriteString("2. **Evaluate positions**: Has trend changed? Should take profit/stop loss?\n")
+	sb.WriteString("1. **Check Market Regime FIRST** (CRITICAL - DO THIS BEFORE ANYTHING ELSE):\n")
+	sb.WriteString("   - Is BTC crashing? (1h < -1.0%% AND 4h < -0.5%%) → SHORT or WAIT, DO NOT LONG\n")
+	sb.WriteString("   - Is BTC bullish? (1h > +0.5%% AND 4h > +0.3%%) → LONG opportunities valid\n")
+	sb.WriteString("   - Is market neutral? → Wait for clear signals, be cautious\n")
+	sb.WriteString("   - ⚠️ **REMEMBER**: Market regime OVERRIDES individual coin signals!\n")
+	sb.WriteString("   - If market is crashing, individual 'bounce' signals are likely FALSE - ignore them\n")
+	sb.WriteString("2. **Analyze Sharpe Ratio**: Is current strategy effective? Need adjustment?\n")
+	sb.WriteString("3. **Evaluate positions**: Has trend changed? Should take profit/stop loss?\n")
 	sb.WriteString("   - 🚫 **CRITICAL**: DO NOT close positions with negative P&L (losing positions)\n")
 	sb.WriteString("   - ✅ **ONLY**: Close positions with positive P&L (profitable positions) to lock in gains\n")
 	sb.WriteString("   - 💡 **Remember**: The system will automatically reject any attempt to close a losing position\n")
-	sb.WriteString("3. **Find new opportunities**: Any strong signals? Long/short opportunities?\n")
-	sb.WriteString("4. **Output decision**: Chain of thought analysis + JSON\n\n")
+	sb.WriteString("4. **Find new opportunities**: Any strong signals? Long/short opportunities?\n")
+	sb.WriteString("   - ⚠️ **CRITICAL**: If market regime is CRASHING, only consider SHORT or WAIT\n")
+	sb.WriteString("   - ⚠️ **CRITICAL**: If market regime is CRASHING, ignore oversold bounce signals (they're traps)\n")
+	sb.WriteString("5. **Output decision**: Chain of thought analysis + JSON\n\n")
 
 	// === Output Format ===
 	sb.WriteString("# 📤 Output Format\n\n")
@@ -472,11 +508,34 @@ func buildUserPrompt(ctx *Context) string {
 	sb.WriteString(fmt.Sprintf("**Time**: %s | **Cycle**: #%d | **Runtime**: %d minutes\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
 
-	// BTC market
+	// BTC market (with crash detection)
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
 		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
 			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
 			btcData.CurrentMACD, btcData.CurrentRSI7))
+
+		// Crash detection warning
+		isCrashing := btcData.PriceChange1h < -1.0 && btcData.PriceChange4h < -0.5
+		if isCrashing {
+			sb.WriteString(fmt.Sprintf("🚨 **MARKET CRASH DETECTED**: BTC is crashing (1h: %.2f%%, 4h: %.2f%%). DO NOT open LONG positions. Consider SHORT or WAIT.\n\n",
+				btcData.PriceChange1h, btcData.PriceChange4h))
+		}
+
+		// Bull market detection
+		isBullish := btcData.PriceChange1h > 0.5 && btcData.PriceChange4h > 0.3
+		if isBullish {
+			sb.WriteString("✅ **MARKET REGIME: BULLISH** - BTC is rising. LONG positions are preferred.\n\n")
+		}
+
+		// Add full BTC market data for context (if available)
+		if btcData.LongerTermContext != nil {
+			ema20 := btcData.LongerTermContext.EMA20
+			ema50 := btcData.LongerTermContext.EMA50
+			if ema20 < ema50 && btcData.CurrentPrice < ema20 {
+				sb.WriteString(fmt.Sprintf("⚠️ **BTC 4h DOWNTREND**: EMA20 (%.2f) < EMA50 (%.2f) and price < EMA20. Market is in downtrend.\n\n",
+					ema20, ema50))
+			}
+		}
 	}
 
 	// Account
@@ -487,6 +546,10 @@ func buildUserPrompt(ctx *Context) string {
 		ctx.Account.TotalPnLPct,
 		ctx.Account.MarginUsedPct,
 		ctx.Account.PositionCount))
+
+	// Risk budget reminder
+	sb.WriteString(fmt.Sprintf("**Risk Guardrail**: Max %.2f USDT (%.1f%% of equity) loss per trade. Stops + sizing MUST respect this cap.\n\n",
+		ctx.Account.TotalEquity*maxRiskPerTradeFraction, maxRiskPerTradeFraction*100))
 
 	// Current positions (full market data)
 	if len(ctx.Positions) > 0 {
@@ -519,6 +582,35 @@ func buildUserPrompt(ctx *Context) string {
 		}
 	} else {
 		sb.WriteString("**Current Positions**: None\n\n")
+	}
+
+	// Market-wide context (before candidate coins)
+	sb.WriteString("## 🌍 Market-Wide Context\n\n")
+	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
+		// Calculate market regime
+		isCrashing := btcData.PriceChange1h < -1.0 && btcData.PriceChange4h < -0.5
+		isBullish := btcData.PriceChange1h > 0.5 && btcData.PriceChange4h > 0.3
+
+		if isCrashing {
+			sb.WriteString("🚨 **MARKET REGIME: CRASHING**\n")
+			sb.WriteString(fmt.Sprintf("- BTC is down significantly (1h: %.2f%%, 4h: %.2f%%)\n", btcData.PriceChange1h, btcData.PriceChange4h))
+			sb.WriteString("- Altcoins will likely fall MORE than BTC (higher correlation during crashes)\n")
+			sb.WriteString("- **STRATEGY**: SHORT or WAIT. DO NOT open LONG positions.\n")
+			sb.WriteString("- Oversold bounces (RSI < 30) are TRAPS during crashes - price can stay oversold for hours.\n")
+			sb.WriteString("- MACD 'improving' during crashes is NOT a buy signal - wait for market recovery.\n\n")
+		} else if isBullish {
+			sb.WriteString("✅ **MARKET REGIME: BULLISH**\n")
+			sb.WriteString(fmt.Sprintf("- BTC is rising (1h: %.2f%%, 4h: %.2f%%)\n", btcData.PriceChange1h, btcData.PriceChange4h))
+			sb.WriteString("- LONG positions are preferred during bull markets\n")
+			sb.WriteString("- Look for pullbacks and entries in uptrend\n\n")
+		} else {
+			sb.WriteString("⚠️ **MARKET REGIME: NEUTRAL/MIXED**\n")
+			sb.WriteString(fmt.Sprintf("- BTC is relatively stable (1h: %.2f%%, 4h: %.2f%%)\n", btcData.PriceChange1h, btcData.PriceChange4h))
+			sb.WriteString("- No clear market direction\n")
+			sb.WriteString("- Be cautious, wait for clear signals before opening positions\n\n")
+		}
+	} else {
+		sb.WriteString("⚠️ **BTC data unavailable** - Cannot determine market regime. Be extra cautious.\n\n")
 	}
 
 	// Candidate coins (full market data)
@@ -643,7 +735,7 @@ func buildUserPrompt(ctx *Context) string {
 								i+1, trade.Symbol, strings.ToUpper(trade.Side),
 								trade.OpenPrice, trade.ClosePrice, trade.PnL, trade.PnLPct, trade.Duration))
 						}
-						sb.WriteString(fmt.Sprintf("  💡 **Key Questions**: Why did these lose? Was entry timing wrong? Was stop loss too wide? Was signal quality insufficient?\n"))
+						sb.WriteString("  💡 **Key Questions**: Why did these lose? Was entry timing wrong? Was stop loss too wide? Was signal quality insufficient? Was it a crash?\n")
 					}
 
 					// Then show wins (reinforce what works)
@@ -654,7 +746,7 @@ func buildUserPrompt(ctx *Context) string {
 								i+1, trade.Symbol, strings.ToUpper(trade.Side),
 								trade.OpenPrice, trade.ClosePrice, trade.PnL, trade.PnLPct, trade.Duration))
 						}
-						sb.WriteString(fmt.Sprintf("  💡 **Key Questions**: What made these profitable? What signals/conditions were present?\n"))
+						sb.WriteString("  💡 **Key Questions**: What made these profitable? What signals/conditions were present?\n")
 					}
 
 					sb.WriteString("\n**💡 Learning Strategy**:\n")
@@ -1214,7 +1306,8 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	if d.Action == "open_long" || d.Action == "open_short" {
 		// Use configured leverage limits based on coin type
 		maxLeverage := altcoinLeverage // Altcoins use configured leverage
-		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
+		isBTCOrETH := d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT"
+		if isBTCOrETH {
 			maxLeverage = btcEthLeverage // BTC and ETH use configured leverage
 		}
 
@@ -1225,29 +1318,19 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			return fmt.Errorf("position margin must be greater than 0: %.2f", d.PositionSizeUSD)
 		}
 
-		// Validate MINIMUM position size (MARGIN) to keep trades meaningful (must overcome fees)
-		// position_size_usd is now MARGIN, not notional
+		// Establish baseline minimum margin (trade must be meaningful)
 		minMargin := math.Max(13, accountEquity*0.15) // Altcoins: 15% of equity minimum margin
-		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
+		if isBTCOrETH {
 			minMargin = math.Max(15, accountEquity*0.20) // BTC/ETH: 20% of equity minimum margin
-		}
-		if d.PositionSizeUSD < minMargin {
-			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-				return fmt.Errorf("position margin too small: %.2f USDT (minimum %.0f USDT = 20%% of equity). Target %.0f-%.0f USDT margin (20-35%% of equity) for meaningful profits",
-					d.PositionSizeUSD, minMargin, accountEquity*0.20, accountEquity*0.35)
-			} else {
-				return fmt.Errorf("position margin too small: %.2f USDT (minimum %.0f USDT = 15%% of equity). Target %.0f-%.0f USDT margin (15-25%% of equity) for meaningful profits",
-					d.PositionSizeUSD, minMargin, accountEquity*0.15, accountEquity*0.25)
-			}
 		}
 
 		// Validate position margin upper limit (position_size_usd is now MARGIN, not notional)
 		maxMargin := accountEquity * 0.50 // Max 50% of equity as margin for BTC/ETH
-		if d.Symbol != "BTCUSDT" && d.Symbol != "ETHUSDT" {
+		if !isBTCOrETH {
 			maxMargin = accountEquity * 0.40 // Max 40% of equity as margin for altcoins
 		}
 		if d.PositionSizeUSD > maxMargin {
-			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
+			if isBTCOrETH {
 				return fmt.Errorf("BTC/ETH position margin cannot exceed %.0f USDT (50%% of equity), actual: %.0f", maxMargin, d.PositionSizeUSD)
 			} else {
 				return fmt.Errorf("altcoin position margin cannot exceed %.0f USDT (40%% of equity), actual: %.0f", maxMargin, d.PositionSizeUSD)
@@ -1270,25 +1353,25 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 
 		// Validate risk-reward ratio (must be ≥1:3)
 		// Calculate entry price (assuming current market price)
-		var entryPrice float64
+		var assumedEntryPrice float64
 		if d.Action == "open_long" {
 			// Long: entry price between stop loss and take profit
-			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2 // Assume entry at 20% position
+			assumedEntryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2 // Assume entry at 20% position
 		} else {
 			// Short: entry price between stop loss and take profit
-			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2 // Assume entry at 20% position
+			assumedEntryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2 // Assume entry at 20% position
 		}
 
 		var riskPercent, rewardPercent, riskRewardRatio float64
 		if d.Action == "open_long" {
-			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
-			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
+			riskPercent = (assumedEntryPrice - d.StopLoss) / assumedEntryPrice * 100
+			rewardPercent = (d.TakeProfit - assumedEntryPrice) / assumedEntryPrice * 100
 			if riskPercent > 0 {
 				riskRewardRatio = rewardPercent / riskPercent
 			}
 		} else {
-			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
-			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
+			riskPercent = (d.StopLoss - assumedEntryPrice) / assumedEntryPrice * 100
+			rewardPercent = (assumedEntryPrice - d.TakeProfit) / assumedEntryPrice * 100
 			if riskPercent > 0 {
 				riskRewardRatio = rewardPercent / riskPercent
 			}
@@ -1298,6 +1381,57 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		if riskRewardRatio < 3.0 {
 			return fmt.Errorf("risk-reward ratio too low (%.2f:1), must be ≥3.0:1 [risk:%.2f%% reward:%.2f%%] [stop loss:%.2f take profit:%.2f]",
 				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+		}
+
+		// Enforce absolute dollar risk cap using live market price
+		marketData, err := market.Get(d.Symbol)
+		if err != nil {
+			return fmt.Errorf("failed to fetch market data for %s: %w", d.Symbol, err)
+		}
+		currentPrice := marketData.CurrentPrice
+		if currentPrice <= 0 {
+			return fmt.Errorf("invalid market price for %s", d.Symbol)
+		}
+
+		var riskPerUnit float64
+		if d.Action == "open_long" {
+			riskPerUnit = currentPrice - d.StopLoss
+		} else {
+			riskPerUnit = d.StopLoss - currentPrice
+		}
+		if riskPerUnit <= 0 {
+			return fmt.Errorf("stop loss %.4f must be on the correct side of current price %.4f", d.StopLoss, currentPrice)
+		}
+
+		notional := d.PositionSizeUSD * float64(d.Leverage)
+		if notional <= 0 {
+			return fmt.Errorf("invalid notional value computed for %s: %.4f", d.Symbol, notional)
+		}
+
+		maxRiskUSD := accountEquity * maxRiskPerTradeFraction
+
+		if maxRiskUSD <= 0 {
+			return fmt.Errorf("invalid account equity %.2f for risk calculation", accountEquity)
+		}
+
+		allowedNotional := maxRiskUSD * currentPrice / riskPerUnit
+		allowedMargin := allowedNotional / float64(d.Leverage)
+
+		if allowedMargin < minMargin {
+			return fmt.Errorf("risk cap %.2f USDT + stop %.4f allow max %.2f USDT margin (min required %.2f) – tighten stop or reduce leverage",
+				maxRiskUSD, d.StopLoss, allowedMargin, minMargin)
+		}
+
+		if d.PositionSizeUSD > allowedMargin {
+			log.Printf("⚠️  %s %s position margin reduced from %.2f to %.2f USDT to respect %.2f USDT risk cap",
+				d.Symbol, d.Action, d.PositionSizeUSD, allowedMargin, maxRiskUSD)
+			d.PositionSizeUSD = allowedMargin
+		}
+
+		if d.PositionSizeUSD < minMargin {
+			log.Printf("ℹ️  %s %s position margin increased from %.2f to minimum %.2f USDT to remain meaningful",
+				d.Symbol, d.Action, d.PositionSizeUSD, minMargin)
+			d.PositionSizeUSD = minMargin
 		}
 	}
 

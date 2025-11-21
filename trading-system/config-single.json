@@ -8,7 +8,7 @@
         "exchange": "paper",
         "groq_key": "${GROQ_API_KEY}",
         "groq_model": "openai/gpt-oss-120b",
-        "initial_balance": 10000.0,
+        "initial_balance": 300.0,
         "scan_interval_minutes": 1
       },
       {
