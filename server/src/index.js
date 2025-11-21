@@ -184,8 +184,8 @@ async function initializeAgents() {
         version: "1.0.0",
         instructions:
           "You are a DataAnalyzer agent. When you receive a request to get trading signals like 'Get the latest trading signal from [OpenAI/Qwen] AI trading model', you must: " +
-          "1. Extract trader_id from the message. If the message contains 'trader_id: xxx', use that exact value. Otherwise map: 'OpenAI' → 'openai_trader_multi', 'Qwen' → 'qwen_trader_multi' " +
-          "2. Fetch the trading signal from the Go API: GET https://trading-system-backend-zdd8.onrender.com/api/decisions/latest?trader_id=[trader_id] " +
+          "1. Map the model name to trader_id: 'OpenAI' → 'openai_trader', 'Qwen' → 'qwen_trader' " +
+          "2. Fetch the trading signal from the Go API: GET http://172.23.240.1:8080/api/trading-signal?trader_id=[trader_id] " +
           "3. Parse the response and extract: decisions (long/short/wait actions with symbols/quantities), chain_of_thought, input_prompt, account_state " +
           "4. Format your response clearly: " +
           "   'Trading Signal for [modelName]: " +
@@ -195,8 +195,7 @@ async function initializeAgents() {
           "   Account State: [equity, PnL, positions] " +
           "   Full Signal Data: [JSON of complete signal]' " +
           "5. The decisions array is the MOST IMPORTANT part - show it prominently. " +
-          "6. Return the complete signal data so the orchestrator can forward it to TradeExecutor. " +
-          "7. IMPORTANT: Use the ACTUAL API response data, not simulated examples. If the API times out or fails, clearly state that the signal could not be retrieved.",
+          "6. Return the complete signal data so the orchestrator can forward it to TradeExecutor.",
       },
     }, true); // skipOnChainCheck = true
 
