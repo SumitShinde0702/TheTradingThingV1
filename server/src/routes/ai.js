@@ -42,6 +42,14 @@ export function createAIRoutes(agentManager) {
     return erc8004Service;
   };
 
+  const inferModelNameFromTrader = (traderId, traderName) => {
+    const normalized = `${traderId || ""} ${traderName || ""}`.toLowerCase();
+    if (!normalized.trim()) return null;
+    if (normalized.includes("qwen")) return "Qwen";
+    if (normalized.includes("openai")) return "OpenAI";
+    return null;
+  };
+
   /**
    * Get available Groq models
    * GET /api/ai/models
@@ -241,6 +249,16 @@ export function createAIRoutes(agentManager) {
     const signalEndpointHint = selectedTraderId
       ? `${TRADING_API_URL}/api/decisions/latest?trader_id=${selectedTraderId}`
       : `${TRADING_API_URL}/api/decisions/latest?trader_id=<TRADER_ID>`;
+
+    const inferredModelName = inferModelNameFromTrader(selectedTraderId, selectedTraderName);
+    const allowedModelNames = inferredModelName ? [inferredModelName] : ["OpenAI", "Qwen"];
+    const allowedModelsList = allowedModelNames.join(", ");
+    const allowedModelsText = inferredModelName
+      ? `AUTHORIZED PAYMENT MODEL: ${inferredModelName}. Only process payment for ${inferredModelName} unless the user explicitly requests an additional model.`
+      : `AUTHORIZED PAYMENT MODELS: ${allowedModelsList}. Only process payment for the models the user explicitly requests. Never charge models that were not requested.`;
+    const paymentModelGuardrail = inferredModelName
+      ? `- The selected trader corresponds to model "${inferredModelName}". Only process payment for ${inferredModelName} unless the user explicitly requests another model.`
+      : `- Only process payment for the model(s) explicitly mentioned by the user. Never assume both models require payment by default.`;
 
     // Helper to send SSE events
     const sendEvent = (type, data) => {
@@ -604,6 +622,25 @@ export function createAIRoutes(agentManager) {
           const { modelName } = input;
           console.log(`[AI-PURCHASE] 🛠️  [process_payment] Starting...`);
           console.log(`[AI-PURCHASE]    Model: ${modelName}`);
+
+          if (!allowedModelNames.includes(modelName)) {
+            const warningMessage = `Model "${modelName}" is not authorized for this purchase. Allowed model(s): ${allowedModelsList}`;
+            console.warn(`[AI-PURCHASE]    ⚠️  ${warningMessage}`);
+            sendEvent("workflow_step", {
+              step: "payment",
+              status: "warning",
+              message: warningMessage
+            });
+            sendEvent("tool", {
+              tool: "process_payment",
+              status: "error",
+              error: warningMessage
+            });
+            return JSON.stringify({
+              success: false,
+              error: warningMessage
+            });
+          }
           
           sendEvent("workflow_step", {
             step: "payment",
@@ -1180,6 +1217,8 @@ export function createAIRoutes(agentManager) {
 
 ${traderContextSection}
 
+${allowedModelsText}
+
 **WORKFLOW EXECUTION MODEL:**
 - You are executing a SEQUENTIAL workflow - one step at a time, in order
 - Call ONE tool, get its result, process the result, then call the NEXT tool
@@ -1200,6 +1239,7 @@ When a user requests to purchase trading signals and execute trades, you MUST fo
 2. Verify all three agents are found. If any are missing, use respond_to_user to inform the user.
 
 **PHASE 2: PAYMENT**
+${paymentModelGuardrail}
 1. Extract the model name(s) from the user's request (OpenAI, Qwen, or both)
 2. For EACH model:
    a. Call process_payment tool with modelName

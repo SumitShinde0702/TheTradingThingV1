@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { t, type Language } from '../i18n/translations';
 
+const SIGNAL_PRICE_HBAR = 1;
+
 interface PurchaseAgentButtonProps {
   traderName?: string;
   traderId?: string;
@@ -385,23 +387,31 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
         />
       </div>
 
-      <div className="flex items-center justify-between gap-4 mb-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
         <div className="text-xs font-mono" style={{ color: '#F0B90B' }}>
           {statusText}
         </div>
-        <button
-          onClick={handlePurchase}
-          disabled={isPurchasing}
-          className={`px-4 py-2 rounded-lg font-semibold transition-all ${
-            isPurchasing ? 'opacity-70 cursor-not-allowed' : 'hover:-translate-y-0.5'
-          }`}
-          style={{
-            background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
-            color: '#000',
-          }}
-        >
-          {isPurchasing ? t('purchaseInProgress', language) : t('purchaseButtonLabel', language)}
-        </button>
+        <div className="flex items-center gap-3">
+          <span
+            className="text-xs font-semibold px-3 py-1 rounded-full"
+            style={{ background: 'rgba(96, 165, 250, 0.15)', color: '#93C5FD', border: '1px solid rgba(96, 165, 250, 0.4)' }}
+          >
+            {t('signalPriceTag', language, { amount: SIGNAL_PRICE_HBAR })}
+          </span>
+          <button
+            onClick={handlePurchase}
+            disabled={isPurchasing}
+            className={`px-4 py-2 rounded-lg font-semibold transition-all ${
+              isPurchasing ? 'opacity-70 cursor-not-allowed' : 'hover:-translate-y-0.5'
+            }`}
+            style={{
+              background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
+              color: '#000',
+            }}
+          >
+            {isPurchasing ? t('purchaseInProgress', language) : t('purchaseButtonLabel', language)}
+          </button>
+        </div>
       </div>
 
       {error && (
