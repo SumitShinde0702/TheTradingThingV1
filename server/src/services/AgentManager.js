@@ -346,26 +346,38 @@ export class AgentManager {
 
   /**
    * Fetch trading signal for DataAnalyzer agent
-   * Extracts model name from message and fetches from Go API
+   * Extracts trader_id from message and fetches from Go API
    */
   async fetchTradingSignalForDataAnalyzer(message) {
-    const TRADING_API_URL = process.env.TRADING_API_URL || "http://172.23.240.1:8080";
+    const TRADING_API_URL = process.env.TRADING_API_URL || "https://trading-system-backend-zdd8.onrender.com";
     const axios = (await import("axios")).default;
     
-    // Extract model name from message
+    // First, try to extract trader_id directly from message (e.g., "trader_id: openai_trader_multi")
     let traderId = null;
-    const messageLower = message.toLowerCase();
     
-    if (messageLower.includes("openai")) {
-      traderId = "openai_trader";
-    } else if (messageLower.includes("qwen")) {
-      traderId = "qwen_trader";
+    // Look for explicit trader_id in message (most reliable)
+    const traderIdMatch = message.match(/trader_id[:\s=]+([a-z0-9_]+)/i);
+    if (traderIdMatch && traderIdMatch[1]) {
+      traderId = traderIdMatch[1];
     } else {
-      // Try to find model name in message
-      const openaiMatch = message.match(/openai/i);
-      const qwenMatch = message.match(/qwen/i);
-      if (openaiMatch) traderId = "openai_trader";
-      else if (qwenMatch) traderId = "qwen_trader";
+      // Fallback: extract from model name
+      const messageLower = message.toLowerCase();
+      
+      if (messageLower.includes("openai")) {
+        // Check if it's multi-agent version
+        if (messageLower.includes("multi") || messageLower.includes("openai_trader_multi")) {
+          traderId = "openai_trader_multi";
+        } else {
+          traderId = "openai_trader";
+        }
+      } else if (messageLower.includes("qwen")) {
+        // Check if it's multi-agent version
+        if (messageLower.includes("multi") || messageLower.includes("qwen_trader_multi")) {
+          traderId = "qwen_trader_multi";
+        } else {
+          traderId = "qwen_trader";
+        }
+      }
     }
     
     if (!traderId) {
@@ -374,7 +386,8 @@ export class AgentManager {
     }
     
     try {
-      const url = `${TRADING_API_URL}/api/trading-signal?trader_id=${traderId}`;
+      // Use the correct endpoint: /api/decisions/latest
+      const url = `${TRADING_API_URL}/api/decisions/latest?trader_id=${traderId}`;
       console.log(`[AgentManager] Fetching trading signal from: ${url}`);
       
       const response = await axios.get(url, { timeout: 10000 });

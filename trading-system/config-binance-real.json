@@ -95,7 +95,7 @@
     "max_daily_loss": 5.0,
     "max_drawdown": 15.0,
     "stop_trading_minutes": 60,
-    "auto_take_profit_pct": 0,
+    "auto_take_profit_pct": 5.0,
     "use_supabase": false,
     "supabase_url": "",
     "supabase_key": "",
