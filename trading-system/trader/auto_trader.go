@@ -400,9 +400,9 @@ func (at *AutoTrader) Run() error {
 }
 
 // startPositionMonitor runs a background goroutine that checks positions every 2 minutes
-// and automatically closes positions with >3% profit
+// and automatically closes positions with >=4.5% profit
 func (at *AutoTrader) startPositionMonitor(ticker *time.Ticker, stopChan chan bool) {
-	log.Printf("[%s] 🔄 Background position monitor started (checking every 2 minutes for positions >3%% profit)", at.name)
+	log.Printf("[%s] 🔄 Background position monitor started (checking every 2 minutes for positions >=4.5%% profit)", at.name)
 
 	for {
 		select {
@@ -415,7 +415,7 @@ func (at *AutoTrader) startPositionMonitor(ticker *time.Ticker, stopChan chan bo
 	}
 }
 
-// checkAndCloseProfitablePositions checks all open positions and closes those with >3% profit
+// checkAndCloseProfitablePositions checks all open positions and closes those with >4.5% profit
 func (at *AutoTrader) checkAndCloseProfitablePositions() {
 	// Skip if not running
 	if !at.isRunning {
@@ -455,8 +455,8 @@ func (at *AutoTrader) checkAndCloseProfitablePositions() {
 			pnlPct = priceChange * 100 * leverage
 		}
 
-		// Only close if profitable AND >3%
-		if unrealizedPnl > 0 && pnlPct >= 3.0 {
+		// Only close if profitable AND >=4.5%
+		if unrealizedPnl > 0 && pnlPct >= 4.5 {
 			log.Printf("[%s] 🎯 [Background Monitor] %s %s: %.2f%% profit (%.2f USDT) - Auto-closing immediately!",
 				at.name, symbol, strings.ToUpper(side), pnlPct, unrealizedPnl)
 
@@ -1287,10 +1287,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, 
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ Failed to set stop loss: %v", err)
-	}
+	// DISABLED: Stop loss orders - we don't want to automatically close losing positions
+	// Only profitable positions can be closed (by AI decision or manual close)
+	// if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
+	// 	log.Printf("  ⚠ Failed to set stop loss: %v", err)
+	// }
 	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
 		log.Printf("  ⚠ Failed to set take profit: %v", err)
 	}
@@ -1336,10 +1337,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision,
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ Failed to set stop loss: %v", err)
-	}
+	// DISABLED: Stop loss orders - we don't want to automatically close losing positions
+	// Only profitable positions can be closed (by AI decision or manual close)
+	// if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
+	// 	log.Printf("  ⚠ Failed to set stop loss: %v", err)
+	// }
 	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
 		log.Printf("  ⚠ Failed to set take profit: %v", err)
 	}

@@ -1104,7 +1104,7 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 	// Get the underlying trader interface
 	traderInterface := traderInstance.GetTrader()
 
-	// Get position info BEFORE closing (for logging)
+	// Get position info BEFORE closing (for logging and P&L check)
 	var positionInfo map[string]interface{}
 	positions, err := traderInterface.GetPositions()
 	if err == nil {
@@ -1113,6 +1113,17 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 			posSide, _ := pos["side"].(string)
 			if posSymbol == req.Symbol && strings.ToLower(posSide) == req.Side {
 				positionInfo = pos
+				
+				// Check if position is losing money - prevent closing losing positions
+				unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
+				if unrealizedPnl < 0 {
+					log.Printf("⚠️ Position %s %s has negative P&L (%.2f USDT) - cannot close losing positions", req.Symbol, req.Side, unrealizedPnl)
+					c.JSON(http.StatusBadRequest, gin.H{
+						"error": fmt.Sprintf("cannot close losing position: P&L is %.2f USDT. Only profitable positions can be closed. Wait for position to recover or hit stop loss.", unrealizedPnl),
+					})
+					return
+				}
+				log.Printf("✓ Position %s %s is profitable (P&L: +%.2f USDT) - closing", req.Symbol, req.Side, unrealizedPnl)
 				break
 			}
 		}
@@ -1204,7 +1215,7 @@ func (s *Server) handleForceClosePosition(c *gin.Context) {
 	// Get the underlying trader interface
 	traderInterface := traderInstance.GetTrader()
 
-	// Get position info BEFORE closing (for logging)
+	// Get position info BEFORE closing (for logging and P&L check)
 	var positionInfo map[string]interface{}
 	positions, err := traderInterface.GetPositions()
 	if err == nil {
@@ -1215,6 +1226,17 @@ func (s *Server) handleForceClosePosition(c *gin.Context) {
 			posSide, _ := pos["side"].(string)
 			if posSymbol == req.Symbol && strings.ToLower(posSide) == req.Side {
 				positionInfo = pos
+				
+				// Check if position is losing money - prevent closing losing positions
+				unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
+				if unrealizedPnl < 0 {
+					log.Printf("⚠️ Position %s %s has negative P&L (%.2f USDT) - cannot force-close losing positions", req.Symbol, req.Side, unrealizedPnl)
+					c.JSON(http.StatusBadRequest, gin.H{
+						"error": fmt.Sprintf("cannot force-close losing position: P&L is %.2f USDT. Only profitable positions can be closed. Wait for position to recover or hit stop loss.", unrealizedPnl),
+					})
+					return
+				}
+				log.Printf("✓ Position %s %s is profitable (P&L: +%.2f USDT) - force-closing", req.Symbol, req.Side, unrealizedPnl)
 			}
 		}
 	}
