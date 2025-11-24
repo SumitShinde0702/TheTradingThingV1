@@ -398,19 +398,19 @@ export function PurchaseAgentButton({ traderName, traderId, language }: Purchase
           >
             {t('signalPriceTag', language, { amount: SIGNAL_PRICE_HBAR })}
           </span>
-          <button
-            onClick={handlePurchase}
-            disabled={isPurchasing}
-            className={`px-4 py-2 rounded-lg font-semibold transition-all ${
-              isPurchasing ? 'opacity-70 cursor-not-allowed' : 'hover:-translate-y-0.5'
-            }`}
-            style={{
-              background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
-              color: '#000',
-            }}
-          >
-            {isPurchasing ? t('purchaseInProgress', language) : t('purchaseButtonLabel', language)}
-          </button>
+        <button
+          onClick={handlePurchase}
+          disabled={isPurchasing}
+          className={`px-4 py-2 rounded-lg font-semibold transition-all ${
+            isPurchasing ? 'opacity-70 cursor-not-allowed' : 'hover:-translate-y-0.5'
+          }`}
+          style={{
+            background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
+            color: '#000',
+          }}
+        >
+          {isPurchasing ? t('purchaseInProgress', language) : t('purchaseButtonLabel', language)}
+        </button>
         </div>
       </div>
 

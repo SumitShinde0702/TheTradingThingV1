@@ -13,8 +13,33 @@ import (
 	"log"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 )
+
+// Global position closing locks to prevent race conditions when multiple traders share the same account
+var (
+	positionClosingLocks = make(map[string]*sync.Mutex) // key: "SYMBOL_SIDE" (e.g., "ETHUSDT_LONG")
+	positionLocksMutex   sync.Mutex                     // Protects the map itself
+)
+
+// getPositionLock returns a mutex for a specific position (symbol+side)
+// This prevents multiple traders from closing the same position simultaneously
+func getPositionLock(symbol, side string) *sync.Mutex {
+	key := fmt.Sprintf("%s_%s", strings.ToUpper(symbol), strings.ToUpper(side))
+
+	positionLocksMutex.Lock()
+	defer positionLocksMutex.Unlock()
+
+	if lock, exists := positionClosingLocks[key]; exists {
+		return lock
+	}
+
+	// Create new lock for this position
+	lock := &sync.Mutex{}
+	positionClosingLocks[key] = lock
+	return lock
+}
 
 // AutoTraderConfig Auto trading configuration (simplified - AI full decision mode)
 type AutoTraderConfig struct {
@@ -361,8 +386,8 @@ func (at *AutoTrader) Run() error {
 	ticker := time.NewTicker(at.config.ScanInterval)
 	defer ticker.Stop()
 
-	// Start background position monitor (checks every 2 minutes for profitable positions to close)
-	positionMonitorTicker := time.NewTicker(2 * time.Minute)
+	// Start background position monitor (checks every 10 seconds for profitable positions to close)
+	positionMonitorTicker := time.NewTicker(10 * time.Second)
 	defer positionMonitorTicker.Stop()
 
 	// Channel to stop background monitor
@@ -399,10 +424,10 @@ func (at *AutoTrader) Run() error {
 	return nil
 }
 
-// startPositionMonitor runs a background goroutine that checks positions every 2 minutes
-// and automatically closes positions with >3% profit
+// startPositionMonitor runs a background goroutine that checks positions every 10 seconds
+// and automatically closes positions with >=4.5% profit
 func (at *AutoTrader) startPositionMonitor(ticker *time.Ticker, stopChan chan bool) {
-	log.Printf("[%s] 🔄 Background position monitor started (checking every 2 minutes for positions >3%% profit)", at.name)
+	log.Printf("[%s] 🔄 Background position monitor started (checking every 10 seconds for positions >=4.5%% profit)", at.name)
 
 	for {
 		select {
@@ -415,7 +440,7 @@ func (at *AutoTrader) startPositionMonitor(ticker *time.Ticker, stopChan chan bo
 	}
 }
 
-// checkAndCloseProfitablePositions checks all open positions and closes those with >3% profit
+// checkAndCloseProfitablePositions checks all open positions and closes those with >4.5% profit
 func (at *AutoTrader) checkAndCloseProfitablePositions() {
 	// Skip if not running
 	if !at.isRunning {
@@ -455,8 +480,44 @@ func (at *AutoTrader) checkAndCloseProfitablePositions() {
 			pnlPct = priceChange * 100 * leverage
 		}
 
-		// Only close if profitable AND >3%
-		if unrealizedPnl > 0 && pnlPct >= 3.0 {
+		// Only close if profitable AND >=4.5%
+		if unrealizedPnl > 0 && pnlPct >= 4.5 {
+			// Get lock for this position to prevent race conditions
+			lock := getPositionLock(symbol, side)
+			lock.Lock()
+			defer lock.Unlock()
+
+			// Re-check position exists and is still profitable (another trader may have closed it)
+			positions, err := at.trader.GetPositions()
+			if err != nil {
+				return // defer will unlock
+			}
+
+			positionStillExists := false
+			positionStillProfitable := false
+			for _, pos := range positions {
+				posSymbol, _ := pos["symbol"].(string)
+				posSide, _ := pos["side"].(string)
+				if posSymbol == symbol && strings.EqualFold(posSide, side) {
+					positionStillExists = true
+					posPnl, _ := pos["unRealizedProfit"].(float64)
+					if posPnl > 0 {
+						positionStillProfitable = true
+					}
+					break
+				}
+			}
+
+			if !positionStillExists {
+				// Position was already closed by another trader
+				return
+			}
+
+			if !positionStillProfitable {
+				// Position is no longer profitable, skip
+				return
+			}
+
 			log.Printf("[%s] 🎯 [Background Monitor] %s %s: %.2f%% profit (%.2f USDT) - Auto-closing immediately!",
 				at.name, symbol, strings.ToUpper(side), pnlPct, unrealizedPnl)
 
@@ -469,6 +530,14 @@ func (at *AutoTrader) checkAndCloseProfitablePositions() {
 			}
 
 			if closeErr != nil {
+				// Check if error is due to position already being closed or margin insufficient (position already closed)
+				errStr := strings.ToLower(closeErr.Error())
+				if strings.Contains(errStr, "no long position") ||
+					strings.Contains(errStr, "no short position") ||
+					strings.Contains(errStr, "margin is insufficient") && strings.Contains(errStr, "-2019") {
+					// Position was already closed by another trader - this is expected, not an error
+					return
+				}
 				log.Printf("[%s] ❌ [Background Monitor] Failed to auto-close %s %s: %v",
 					at.name, symbol, strings.ToUpper(side), closeErr)
 			} else {
@@ -725,6 +794,16 @@ func (at *AutoTrader) runCycle() error {
 				log.Printf("📊 [Copy Trading] Source equity: %.2f, Current equity: %.2f, Ratio: %.2f",
 					totalSourceEquity, currentEquity, equityRatio)
 
+				// Get current positions to verify close decisions are valid
+				currentPositions, _ := at.trader.GetPositions()
+				positionMap := make(map[string]bool) // key: "SYMBOL_SIDE" (e.g., "ETHUSDT_LONG")
+				for _, pos := range currentPositions {
+					posSymbol, _ := pos["symbol"].(string)
+					posSide, _ := pos["side"].(string)
+					key := fmt.Sprintf("%s_%s", strings.ToUpper(posSymbol), strings.ToUpper(posSide))
+					positionMap[key] = true
+				}
+
 				// Deduplicate decisions by symbol+action (if multiple traders want same action, take first)
 				decisionMap := make(map[string]decisionPkg.Decision) // key: symbol_action
 				for _, d := range allSourceDecisions {
@@ -732,6 +811,20 @@ func (at *AutoTrader) runCycle() error {
 					if d.Action == "wait" || d.Action == "hold" || d.Symbol == "ALL" {
 						continue
 					}
+
+					// For close actions, verify position exists
+					if d.Action == "close_long" || d.Action == "close_short" {
+						side := "LONG"
+						if d.Action == "close_short" {
+							side = "SHORT"
+						}
+						posKey := fmt.Sprintf("%s_%s", strings.ToUpper(d.Symbol), side)
+						if !positionMap[posKey] {
+							log.Printf("⚠️  [Copy Trading] Skipping %s %s - position does not exist in this account", d.Symbol, d.Action)
+							continue
+						}
+					}
+
 					key := fmt.Sprintf("%s_%s", d.Symbol, d.Action)
 					if _, exists := decisionMap[key]; !exists {
 						decisionMap[key] = d
@@ -1287,10 +1380,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, 
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ Failed to set stop loss: %v", err)
-	}
+	// DISABLED: Stop loss orders - we don't want to automatically close losing positions
+	// Only profitable positions can be closed (by AI decision or manual close)
+	// if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
+	// 	log.Printf("  ⚠ Failed to set stop loss: %v", err)
+	// }
 	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
 		log.Printf("  ⚠ Failed to set take profit: %v", err)
 	}
@@ -1336,10 +1430,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision,
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ Failed to set stop loss: %v", err)
-	}
+	// DISABLED: Stop loss orders - we don't want to automatically close losing positions
+	// Only profitable positions can be closed (by AI decision or manual close)
+	// if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
+	// 	log.Printf("  ⚠ Failed to set stop loss: %v", err)
+	// }
 	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
 		log.Printf("  ⚠ Failed to set take profit: %v", err)
 	}
@@ -1351,23 +1446,36 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision,
 func (at *AutoTrader) executeCloseLongWithRecord(decision *decisionPkg.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 Closing long position: %s", decision.Symbol)
 
-	// Check position P&L before closing - don't close losing positions
+	// Get lock for this position to prevent race conditions
+	lock := getPositionLock(decision.Symbol, "LONG")
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Check position exists and P&L before closing - don't close losing positions
 	positions, err := at.trader.GetPositions()
-	if err == nil {
-		for _, pos := range positions {
-			posSymbol, _ := pos["symbol"].(string)
-			posSide, _ := pos["side"].(string)
-			if posSymbol == decision.Symbol && strings.ToLower(posSide) == "long" {
-				unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
-				if unrealizedPnl < 0 {
-					// Position is losing money - reject close unless stop loss is hit
-					log.Printf("  ⚠️ Position %s LONG has negative P&L (%.2f USDT) - holding until profitable or stop loss hit", decision.Symbol, unrealizedPnl)
-					return fmt.Errorf("position is losing money (P&L: %.2f USDT) - holding until profitable. Only close if stop loss is hit or position becomes profitable", unrealizedPnl)
-				}
-				log.Printf("  ✓ Position %s LONG is profitable (P&L: +%.2f USDT) - closing", decision.Symbol, unrealizedPnl)
-				break
+	if err != nil {
+		return fmt.Errorf("failed to get positions: %w", err)
+	}
+
+	positionExists := false
+	for _, pos := range positions {
+		posSymbol, _ := pos["symbol"].(string)
+		posSide, _ := pos["side"].(string)
+		if posSymbol == decision.Symbol && strings.ToLower(posSide) == "long" {
+			positionExists = true
+			unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
+			if unrealizedPnl < 0 {
+				// Position is losing money - reject close unless stop loss is hit
+				log.Printf("  ⚠️ Position %s LONG has negative P&L (%.2f USDT) - holding until profitable or stop loss hit", decision.Symbol, unrealizedPnl)
+				return fmt.Errorf("position is losing money (P&L: %.2f USDT) - holding until profitable. Only close if stop loss is hit or position becomes profitable", unrealizedPnl)
 			}
+			log.Printf("  ✓ Position %s LONG is profitable (P&L: +%.2f USDT) - closing", decision.Symbol, unrealizedPnl)
+			break
 		}
+	}
+
+	if !positionExists {
+		return fmt.Errorf("no long position found for %s (may have been closed by another trader)", decision.Symbol)
 	}
 
 	// Get current price
@@ -1380,6 +1488,12 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decisionPkg.Decision,
 	// Close position
 	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = close all
 	if err != nil {
+		// Check if position was already closed
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "no long position") ||
+			(strings.Contains(errStr, "margin is insufficient") && strings.Contains(errStr, "-2019")) {
+			return fmt.Errorf("position %s LONG was already closed (likely by another trader)", decision.Symbol)
+		}
 		return err
 	}
 
@@ -1396,23 +1510,36 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decisionPkg.Decision,
 func (at *AutoTrader) executeCloseShortWithRecord(decision *decisionPkg.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 Closing short position: %s", decision.Symbol)
 
-	// Check position P&L before closing - don't close losing positions
+	// Get lock for this position to prevent race conditions
+	lock := getPositionLock(decision.Symbol, "SHORT")
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Check position exists and P&L before closing - don't close losing positions
 	positions, err := at.trader.GetPositions()
-	if err == nil {
-		for _, pos := range positions {
-			posSymbol, _ := pos["symbol"].(string)
-			posSide, _ := pos["side"].(string)
-			if posSymbol == decision.Symbol && strings.ToLower(posSide) == "short" {
-				unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
-				if unrealizedPnl < 0 {
-					// Position is losing money - reject close unless stop loss is hit
-					log.Printf("  ⚠️ Position %s SHORT has negative P&L (%.2f USDT) - holding until profitable or stop loss hit", decision.Symbol, unrealizedPnl)
-					return fmt.Errorf("position is losing money (P&L: %.2f USDT) - holding until profitable. Only close if stop loss is hit or position becomes profitable", unrealizedPnl)
-				}
-				log.Printf("  ✓ Position %s SHORT is profitable (P&L: +%.2f USDT) - closing", decision.Symbol, unrealizedPnl)
-				break
+	if err != nil {
+		return fmt.Errorf("failed to get positions: %w", err)
+	}
+
+	positionExists := false
+	for _, pos := range positions {
+		posSymbol, _ := pos["symbol"].(string)
+		posSide, _ := pos["side"].(string)
+		if posSymbol == decision.Symbol && strings.ToLower(posSide) == "short" {
+			positionExists = true
+			unrealizedPnl, _ := pos["unRealizedProfit"].(float64)
+			if unrealizedPnl < 0 {
+				// Position is losing money - reject close unless stop loss is hit
+				log.Printf("  ⚠️ Position %s SHORT has negative P&L (%.2f USDT) - holding until profitable or stop loss hit", decision.Symbol, unrealizedPnl)
+				return fmt.Errorf("position is losing money (P&L: %.2f USDT) - holding until profitable. Only close if stop loss is hit or position becomes profitable", unrealizedPnl)
 			}
+			log.Printf("  ✓ Position %s SHORT is profitable (P&L: +%.2f USDT) - closing", decision.Symbol, unrealizedPnl)
+			break
 		}
+	}
+
+	if !positionExists {
+		return fmt.Errorf("no short position found for %s (may have been closed by another trader)", decision.Symbol)
 	}
 
 	// Get current price
@@ -1425,6 +1552,12 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decisionPkg.Decision
 	// Close position
 	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = close all
 	if err != nil {
+		// Check if position was already closed
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "no short position") ||
+			(strings.Contains(errStr, "margin is insufficient") && strings.Contains(errStr, "-2019")) {
+			return fmt.Errorf("position %s SHORT was already closed (likely by another trader)", decision.Symbol)
+		}
 		return err
 	}
 

@@ -134,12 +134,11 @@ export class GroqService {
    * @returns {Promise<Object|null>} Trading signal data or null if unavailable
    */
   async fetchTradingSignal(agent) {
-    // Get trading API URL from environment or agent metadata
-    const tradingApiUrl = 
-      agent.metadata?.tradingApiUrl || 
-      process.env.TRADING_API_URL || 
+    // Get nofx API URL from environment or agent metadata
+    const nofxApiUrl = 
+      agent.metadata?.nofxApiUrl || 
       process.env.NOFX_API_URL || 
-      "https://trading-system-backend-zdd8.onrender.com"; // Default trading system backend
+      "http://localhost:8080"; // Default nofx API port
     
     // Get trader ID or model from agent metadata
     const traderId = agent.metadata?.traderId || agent.metadata?.trader_id;
@@ -147,19 +146,12 @@ export class GroqService {
     
     let apiUrl;
     if (traderId) {
-      apiUrl = `${tradingApiUrl}/api/decisions/latest?trader_id=${traderId}`;
+      apiUrl = `${nofxApiUrl}/api/trading-signal?trader_id=${traderId}`;
     } else if (model) {
-      // Map model name to trader_id if needed
-      const mappedTraderId = model.toLowerCase().includes('openai') ? 'openai_trader_multi' : 
-                            model.toLowerCase().includes('qwen') ? 'qwen_trader_multi' : null;
-      if (mappedTraderId) {
-        apiUrl = `${tradingApiUrl}/api/decisions/latest?trader_id=${mappedTraderId}`;
-      } else {
-        apiUrl = `${tradingApiUrl}/api/decisions/latest?trader_id=default_trader`;
-      }
+      apiUrl = `${nofxApiUrl}/api/trading-signal?model=${model}`;
     } else {
-      // Default: try to get first trader
-      apiUrl = `${tradingApiUrl}/api/decisions/latest?trader_id=default_trader`;
+      // Default: try to get first trader (if nofx only has one trader)
+      apiUrl = `${nofxApiUrl}/api/trading-signal?trader_id=default_trader`;
     }
 
     try {

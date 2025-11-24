@@ -17,9 +17,9 @@ export function createAIRoutes(agentManager) {
   
   const SERVER_URL = process.env.SERVER_URL || "http://localhost:8443";
   // Trading API URL (Go server with trading signals)
-  // Default: https://trading-system-backend-zdd8.onrender.com (Render deployment)
+  // Default: http://172.23.240.1:8080 (current network IP)
   // Can be overridden with TRADING_API_URL env var
-  const TRADING_API_URL = process.env.TRADING_API_URL || "https://trading-system-backend-zdd8.onrender.com";
+  const TRADING_API_URL = process.env.TRADING_API_URL || "http://172.23.240.1:8080";
   
   // Lazy-load payer wallet to avoid connection issues at startup
   let payerWallet = null;

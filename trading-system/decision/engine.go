@@ -383,13 +383,14 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- Range-bound oscillation\n")
 	sb.WriteString("- Recently closed (<15 minutes ago)\n\n")
 	sb.WriteString("**🚨 CRITICAL: Position Management Rules - READ CAREFULLY 🚨**:\n")
-	sb.WriteString(fmt.Sprintf("- ✅ **Stop losses are MANDATORY**: Size trades so the stop risks ≤ %.1f%% of equity (≈ %.2f USDT)\n",
+	sb.WriteString("**⚠️ IMPORTANT: Stop loss orders are DISABLED** - Positions will NOT be automatically closed by stop losses.\n")
+	sb.WriteString("- 🚫 **NEVER close losing positions** - The system will reject any attempt to close positions with negative P&L\n")
+	sb.WriteString("- ✅ **ONLY close profitable positions** - Wait for positions to become profitable before closing\n")
+	sb.WriteString("- ✅ **Let losing positions recover** - Hold losing positions until they become profitable or you decide to wait longer\n")
+	sb.WriteString("- ✅ **Take profits on winners** - Close profitable positions to lock in gains (≥3-5%%+ profit recommended)\n")
+	sb.WriteString(fmt.Sprintf("- 💡 **Risk Management**: Still size trades appropriately - max risk ≤ %.1f%% of equity (≈ %.2f USDT) per trade\n",
 		maxRiskPerTradeFraction*100, accountEquity*maxRiskPerTradeFraction))
-	sb.WriteString("- ✅ **Close losing positions the moment the stop is hit** – capital preservation > hope\n")
-	sb.WriteString("- ✅ Let winners run when risk is covered, but trail stops to lock gains\n")
-	sb.WriteString("- 🚫 Do NOT widen stops or average down unless the new plan still respects the risk cap\n")
-	sb.WriteString("- 📋 Example: If BTC risk (entry-stop) = 0.8%, you can risk 2% of equity → leverage accordingly\n")
-	sb.WriteString("- 📋 Example: If an alt needs a 5% stop, reduce size so a full stop = 2% of equity\n\n")
+	sb.WriteString("- 💡 **Position Sizing**: Use appropriate position sizes and leverage to manage risk, even without stop loss orders\n\n")
 	sb.WriteString("**Take Profit Strategy**:\n")
 	sb.WriteString("- ✅ Take profits when positions are significantly profitable (≥3-5%+ unrealized P&L)\n")
 	sb.WriteString("- ✅ Close positions that have reached or exceeded take profit targets\n")
@@ -464,8 +465,9 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("Even if you decide to wait, output an array with at least one decision (e.g., `{\"symbol\": \"ALL\", \"action\": \"wait\", \"reasoning\": \"...\"}`).\n\n")
 	sb.WriteString("Format example:\n")
 	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 40, \"reasoning\": \"Downtrend + MACD bearish crossover\"},\n", btcEthLeverage, accountEquity*0.25))
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"ADAUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 0.5200, \"take_profit\": 0.5750, \"confidence\": 88, \"risk_usd\": 20, \"reasoning\": \"Oversold bounce + volume expansion\"},\n", altcoinLeverage, accountEquity*0.20))
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": 4, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 80, \"risk_usd\": 40, \"reasoning\": \"Downtrend + MACD bearish crossover (lower confidence 80%% - using conservative 4x leverage)\"},\n", accountEquity*0.25))
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"ETHUSDT\", \"action\": \"open_long\", \"leverage\": 5, \"position_size_usd\": %.0f, \"stop_loss\": 2700, \"take_profit\": 2900, \"confidence\": 87, \"risk_usd\": 30, \"reasoning\": \"Uptrend + RSI recovery (moderate confidence 87%% - using balanced 5x leverage)\"},\n", accountEquity*0.20))
+	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"ADAUSDT\", \"action\": \"open_long\", \"leverage\": 7, \"position_size_usd\": %.0f, \"stop_loss\": 0.5200, \"take_profit\": 0.5750, \"confidence\": 95, \"risk_usd\": 20, \"reasoning\": \"Oversold bounce + volume expansion (high confidence 95%% - using maximum 7x leverage)\"},\n", accountEquity*0.20))
 	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"close_long\", \"reasoning\": \"Take profit exit - position is profitable (+5.2%%)\"}\n")
 	sb.WriteString("]\n```\n")
 	sb.WriteString("⚠️ **CRITICAL REMINDER**: Only close positions that are PROFITABLE (positive P&L). If a position is losing (negative P&L), DO NOT attempt to close it - the system will reject it automatically. Example: If BNBUSDT is -2.5%%, wait until it becomes positive before closing.\n\n")
@@ -473,6 +475,18 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("**Field descriptions**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100 (REQUIRE ≥85 for opening positions - fees require higher confidence)\n")
+	sb.WriteString("- `leverage`: MUST vary based on confidence! Higher confidence = higher leverage, lower confidence = lower leverage:\n")
+	if btcEthLeverage == altcoinLeverage {
+		sb.WriteString(fmt.Sprintf("  • Range: 1-%dx (BTC/ETH and altcoins both max at %dx)\n", btcEthLeverage, btcEthLeverage))
+	} else {
+		sb.WriteString(fmt.Sprintf("  • Range: 1-%dx for BTC/ETH, 1-%dx for altcoins\n", btcEthLeverage, altcoinLeverage))
+	}
+	sb.WriteString("  • Confidence 75-85%: Use 3-5x leverage (lower confidence - conservative approach)\n")
+	sb.WriteString("  • Confidence 85-90%: Use 5-6x leverage (moderate - balanced risk/reward)\n")
+	sb.WriteString(fmt.Sprintf("  • Confidence 90%%+: Use %dx leverage (maximum - highest conviction only)\n", max(btcEthLeverage, altcoinLeverage)))
+	sb.WriteString("  • ⚠️ CRITICAL: Do NOT always use maximum leverage! Adjust leverage based on signal quality and confidence.\n")
+	sb.WriteString("  • 💡 Strategy: Lower confidence (75-85%) → conservative leverage (3-5x), moderate confidence (85-90%) → balanced leverage (5-6x), high confidence (90%+) → maximum leverage (7x)\n")
+	sb.WriteString(fmt.Sprintf("  • 💡 Example: 80%% confidence → 4x leverage, 87%% confidence → 5x leverage, 92%% confidence → 7x leverage, 98%% confidence → 7x leverage\n"))
 	sb.WriteString("- `position_size_usd`: MARGIN (actual USDT used), NOT notional! Use meaningful sizes based on your equity:\n")
 	sb.WriteString(fmt.Sprintf("  • BTC/ETH: MINIMUM $%.0f MARGIN (20%% of equity) – TARGET $%.0f-$%.0f MARGIN (20-35%% of equity)\n", accountEquity*0.20, accountEquity*0.20, accountEquity*0.35))
 	sb.WriteString(fmt.Sprintf("  • Altcoins: MINIMUM $%.0f MARGIN (15%% of equity) – TARGET $%.0f-$%.0f MARGIN (15-25%% of equity)\n", accountEquity*0.15, accountEquity*0.15, accountEquity*0.25))
@@ -485,7 +499,8 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString(fmt.Sprintf("  • ⚠️ Maximum: $%.0f margin for BTC/ETH, $%.0f margin for altcoins (to keep margin available for other opportunities)\n", accountEquity*0.50, accountEquity*0.40))
 	sb.WriteString("  • 💡 IMPORTANT: Calculate position size as a percentage of the ACTUAL equity shown in the account section, not a fixed dollar amount\n")
 	sb.WriteString(fmt.Sprintf("  • 💡 Example: If equity is 210 USDT, 25%% = 52.5 USDT MARGIN, 30%% = 63 USDT MARGIN. With %dx leverage, this creates $%.0f-$%.0f notional positions\n", altcoinLeverage, 52.5*float64(altcoinLeverage), 63*float64(altcoinLeverage)))
-	sb.WriteString("- Required for opening: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("- Required for opening: leverage, position_size_usd, stop_loss (for risk planning only - not executed), take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("  • Note: `stop_loss` is required for risk calculation but will NOT be set as an order (losing positions cannot be closed)\n")
 	sb.WriteString("- If no actions: use `{\"symbol\": \"ALL\", \"action\": \"wait\", \"reasoning\": \"your reason\"}`\n\n")
 
 	// === Key Reminders ===
@@ -1394,13 +1409,29 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		}
 
 		var riskPerUnit float64
+		var stopLossDistancePercent float64
 		if d.Action == "open_long" {
 			riskPerUnit = currentPrice - d.StopLoss
+			stopLossDistancePercent = (riskPerUnit / currentPrice) * 100
 		} else {
 			riskPerUnit = d.StopLoss - currentPrice
+			stopLossDistancePercent = (riskPerUnit / currentPrice) * 100
 		}
 		if riskPerUnit <= 0 {
 			return fmt.Errorf("stop loss %.4f must be on the correct side of current price %.4f", d.StopLoss, currentPrice)
+		}
+
+		// Validate stop loss distance for risk planning (stop loss orders are disabled, but we still validate for risk management)
+		// With 7x leverage, a -10% price move = -70% loss on margin!
+		// Reuse isBTCOrETH from earlier in function
+		maxStopLossPercent := 5.0 // Max 5% stop loss for altcoins (for risk planning)
+		if isBTCOrETH {
+			maxStopLossPercent = 3.0 // Max 3% stop loss for BTC/ETH (for risk planning)
+		}
+
+		if stopLossDistancePercent > maxStopLossPercent {
+			return fmt.Errorf("stop loss distance too wide for risk planning: %.2f%% (max allowed: %.1f%% for %s). With %dx leverage, this would represent %.1f%% potential loss on margin. Note: Stop loss orders are disabled - this is for risk calculation only",
+				stopLossDistancePercent, maxStopLossPercent, d.Symbol, d.Leverage, stopLossDistancePercent*float64(d.Leverage))
 		}
 
 		notional := d.PositionSizeUSD * float64(d.Leverage)
