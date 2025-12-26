@@ -2,6 +2,7 @@ package trader
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"lia/config"
 	decisionPkg "lia/decision"
@@ -12,6 +13,7 @@ import (
 	"lia/pool"
 	"log"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,13 @@ import (
 var (
 	positionClosingLocks = make(map[string]*sync.Mutex) // key: "SYMBOL_SIDE" (e.g., "ETHUSDT_LONG")
 	positionLocksMutex   sync.Mutex                     // Protects the map itself
+)
+
+var ErrMarginInsufficient = errors.New("margin insufficient for order")
+
+const (
+	marginSafetyBuffer  = 1.0 // leave at least 1 USDT to cover taker fees and funding adjustments
+	minExecutableMargin = 5.0 // skip trades that would use less than this amount of margin
 )
 
 // getPositionLock returns a mutex for a specific position (symbol+side)
@@ -1069,6 +1078,9 @@ func (at *AutoTrader) runCycle() error {
 
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
 			log.Printf("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
+			if errors.Is(err, ErrMarginInsufficient) {
+				log.Printf("   ↳ Margin alert: %s %s skipped due to insufficient free margin", d.Symbol, d.Action)
+			}
 			actionRecord.Error = err.Error()
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s failed: %v", d.Symbol, d.Action, err))
 		} else {
@@ -1342,6 +1354,72 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decisionPkg.Decision, 
 	}
 }
 
+func (at *AutoTrader) determineExecutableMargin(symbol, action string, desiredMargin float64) (float64, float64, error) {
+	balance, err := at.trader.GetBalance()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to fetch balance before %s %s: %w", action, symbol, err)
+	}
+
+	rawAvailable, exists := balance["availableBalance"]
+	if !exists {
+		return 0, 0, fmt.Errorf("failed to determine available balance before %s %s: field missing", action, symbol)
+	}
+
+	available, err := toFloat64(rawAvailable)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid available balance format before %s %s: %w", action, symbol, err)
+	}
+
+	maxUsable := available - marginSafetyBuffer
+	if maxUsable < 0 {
+		maxUsable = 0
+	}
+
+	effectiveMargin := desiredMargin
+	if effectiveMargin > maxUsable {
+		effectiveMargin = maxUsable
+	}
+
+	if effectiveMargin < minExecutableMargin {
+		return 0, available, fmt.Errorf("%w: usable margin %.2f USDT is below minimum %.2f USDT (available %.2f USDT)",
+			ErrMarginInsufficient, effectiveMargin, minExecutableMargin, available)
+	}
+
+	if effectiveMargin < desiredMargin {
+		log.Printf("  ⚠️  Reducing %s %s margin from %.2f to %.2f USDT (available: %.2f USDT, buffer: %.2f USDT)",
+			symbol, action, desiredMargin, effectiveMargin, available, marginSafetyBuffer)
+	}
+
+	return effectiveMargin, available, nil
+}
+
+func isMarginInsufficientAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "margin is insufficient") || strings.Contains(lower, "-2019")
+}
+
+func toFloat64(value interface{}) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case json.Number:
+		return v.Float64()
+	case string:
+		return strconv.ParseFloat(v, 64)
+	default:
+		return 0, fmt.Errorf("unsupported numeric type %T", value)
+	}
+}
+
 // executeOpenLongWithRecord Execute opening long position and record detailed information
 func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📈 Opening long position: %s", decision.Symbol)
@@ -1354,11 +1432,16 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, 
 		return err
 	}
 
+	effectiveMargin, _, err := at.determineExecutableMargin(decision.Symbol, "open_long", decision.PositionSizeUSD)
+	if err != nil {
+		return err
+	}
+
 	// Calculate quantity from MARGIN
 	// position_size_usd is now MARGIN, not notional
 	// notional = margin * leverage
 	// quantity = notional / price
-	notionalValue := decision.PositionSizeUSD * float64(decision.Leverage)
+	notionalValue := effectiveMargin * float64(decision.Leverage)
 	quantity := notionalValue / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
@@ -1366,6 +1449,10 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decisionPkg.Decision, 
 	// Open position
 	order, err := at.trader.OpenLong(decision.Symbol, quantity, decision.Leverage)
 	if err != nil {
+		if isMarginInsufficientAPIError(err) {
+			return fmt.Errorf("%w: Binance rejected %s open_long (need %.2f USDT margin, err: %v)",
+				ErrMarginInsufficient, decision.Symbol, effectiveMargin, err)
+		}
 		return err
 	}
 
@@ -1404,11 +1491,16 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision,
 		return err
 	}
 
+	effectiveMargin, _, err := at.determineExecutableMargin(decision.Symbol, "open_short", decision.PositionSizeUSD)
+	if err != nil {
+		return err
+	}
+
 	// Calculate quantity from MARGIN
 	// position_size_usd is now MARGIN, not notional
 	// notional = margin * leverage
 	// quantity = notional / price
-	notionalValue := decision.PositionSizeUSD * float64(decision.Leverage)
+	notionalValue := effectiveMargin * float64(decision.Leverage)
 	quantity := notionalValue / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
@@ -1416,6 +1508,10 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decisionPkg.Decision,
 	// Open position
 	order, err := at.trader.OpenShort(decision.Symbol, quantity, decision.Leverage)
 	if err != nil {
+		if isMarginInsufficientAPIError(err) {
+			return fmt.Errorf("%w: Binance rejected %s open_short (need %.2f USDT margin, err: %v)",
+				ErrMarginInsufficient, decision.Symbol, effectiveMargin, err)
+		}
 		return err
 	}
 
