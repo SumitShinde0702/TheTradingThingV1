@@ -102,15 +102,12 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 	// 先检查缓存是否有效
 	t.balanceCacheMutex.RLock()
 	if t.cachedBalance != nil && time.Since(t.balanceCacheTime) < t.cacheDuration {
-		cacheAge := time.Since(t.balanceCacheTime)
 		t.balanceCacheMutex.RUnlock()
-		log.Printf("✓ Using cached account balance (cached %.1f seconds ago)", cacheAge.Seconds())
 		return t.cachedBalance, nil
 	}
 	t.balanceCacheMutex.RUnlock()
 
 	// 缓存过期或不存在，调用API
-	log.Printf("🔄 Cache expired, calling Binance API to get account balance...")
 	account, err := t.client.NewGetAccountService().Do(context.Background())
 	if err != nil {
 		// If timestamp error, try re-syncing and retry once
@@ -159,15 +156,12 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	// 先检查缓存是否有效
 	t.positionsCacheMutex.RLock()
 	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
-		cacheAge := time.Since(t.positionsCacheTime)
 		t.positionsCacheMutex.RUnlock()
-		log.Printf("✓ Using cached positions (cached %.1f seconds ago)", cacheAge.Seconds())
 		return t.cachedPositions, nil
 	}
 	t.positionsCacheMutex.RUnlock()
 
 	// 缓存过期或不存在，调用API
-	log.Printf("🔄 Cache expired, calling Binance API to get positions...")
 	positions, err := t.client.NewGetPositionRiskService().Do(context.Background())
 	if err != nil {
 		// If timestamp error, try re-syncing and retry once
